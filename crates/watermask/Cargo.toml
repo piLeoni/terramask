@@ -1,0 +1,25 @@
+[package]
+name = "watermask"
+description = "Water masks, shorelines and distance-to-shore grids for any area, from OpenStreetMap vector tiles fetched on demand"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["gis", "openstreetmap", "coastline", "vector-tiles", "raster"]
+categories = ["science::geo", "graphics"]
+
+[features]
+default = ["fetch"]
+# Download and cache tiles over HTTP. Off for WebAssembly, where the page fetches.
+fetch = ["dep:ureq"]
+
+[dependencies]
+flate2 = "1"
+i_overlay = "9"
+ureq = { version = "2", optional = true }
+
+[dev-dependencies]
+png = "0.17"
+flate2 = "1"
+tiny-skia = "0.11"

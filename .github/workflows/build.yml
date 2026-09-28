@@ -1,0 +1,119 @@
+# Builds the packages for every platform, run by hand (gh workflow run build.yml).
+# Publishing is done from the terminal with what it produces.
+
+name: Build
+
+on:
+  workflow_dispatch:
+
+env:
+  MACOSX_DEPLOYMENT_TARGET: '10.13'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test
+
+  # Python: one abi3 wheel per platform, plus the source package.
+  wheels:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64, manylinux: auto }
+          - { os: ubuntu-latest, target: aarch64, manylinux: '2_28' }
+          - { os: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2 }
+          - { os: ubuntu-latest, target: aarch64, manylinux: musllinux_1_2 }
+          - { os: macos-latest, target: x86_64 }
+          - { os: macos-latest, target: aarch64 }
+          - { os: windows-latest, target: x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.target }}-${{ matrix.manylinux || 'native' }}
+          path: dist
+
+  sdist:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist
+
+  # Node: one native addon per platform, each its own npm package.
+  node:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, target: aarch64-apple-darwin, test: true }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, flags: --use-napi-cross, test: true }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu, flags: --use-napi-cross }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, test: true }
+          - { os: windows-latest, target: aarch64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: node
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run build -- --target ${{ matrix.target }} ${{ matrix.flags }}
+        env:
+          # ring's assembly needs it; the glibc 2.17 cross gcc doesn't define it.
+          CFLAGS_aarch64_unknown_linux_gnu: -D__ARM_ARCH=8
+      - run: npm test
+        if: matrix.test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.target }}
+          path: node/watermask.*.node
+          if-no-files-found: error
+
+  wasm:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+      - run: wasm-pack build crates/watermask-wasm --release --target web --scope pileoni --out-dir pkg
+      - run: cp README.md LICENSE crates/watermask-wasm/pkg/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-pkg
+          path: crates/watermask-wasm/pkg

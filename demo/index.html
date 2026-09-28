@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>watermask demo</title>
+<style>
+  body { font: 13px/1.4 ui-monospace, Menlo, monospace; margin: 16px; color: #000; background: #fff; }
+  form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  input { font: inherit; padding: 2px 4px; border: 1px solid #000; }
+  input[name=bounds] { width: 26em; }
+  input[name=width] { width: 5em; }
+  button { font: inherit; background: #fff; border: 1px solid #000; padding: 2px 8px; cursor: pointer; }
+  button[type=submit] { background: #000; color: #fff; }
+  #status { margin: 4px 0 8px; white-space: pre-wrap; }
+  canvas { border: 1px solid #000; max-width: 100%; }
+</style>
+</head>
+<body>
+<form id="f">
+  <input name="bounds" value="-70.85,41.3,-70.45,41.55" title="west,south,east,north">
+  <input name="width" value="1100" title="width in pixels">
+  <button type="submit">Draw</button>
+  <button type="button" data-b="-70.85,41.3,-70.45,41.55">Martha's Vineyard</button>
+  <button type="button" data-b="4.75,52.30,5.05,52.43">Amsterdam</button>
+  <button type="button" data-b="12.2,45.35,12.45,45.5">Venice</button>
+  <button type="button" data-b="6.1,46.15,6.3,46.26">Geneva</button>
+</form>
+<div id="status">Loading…</div>
+<canvas id="c"></canvas>
+<p>Map data © OpenMapTiles © OpenStreetMap contributors, via OpenFreeMap.</p>
+
+<script type="module">
+import init, { Water, zoomFor, tilesFor, tileUrl } from './pkg/watermask_wasm.js'
+
+const TILEJSON = 'https://tiles.openfreemap.org/planet'
+const form = document.getElementById('f')
+const status = document.getElementById('status')
+const canvas = document.getElementById('c')
+
+await init()
+const tilejson = await (await fetch(TILEJSON)).json()
+status.textContent = 'Ready.'
+
+async function draw() {
+  const [w, s, e, n] = form.bounds.value.split(',').map(Number)
+  const width = Number(form.width.value)
+  const t0 = performance.now()
+  const z = zoomFor(w, s, e, n, width, 256, tilejson.maxzoom)
+  const ids = tilesFor(w, s, e, n, z)
+  const count = ids.length / 3
+  status.textContent = `Fetching ${count} tiles at zoom ${z}…`
+  const water = new Water()
+  let bytes = 0
+  await Promise.all(Array.from({ length: count }, async (_, i) => {
+    const [tz, tx, ty] = ids.slice(3 * i, 3 * i + 3)
+    const r = await fetch(tileUrl(tilejson.tiles[0], tz, tx, ty))
+    if (!r.ok) return
+    const b = new Uint8Array(await r.arrayBuffer())
+    bytes += b.length
+    water.addTile(tz, tx, ty, b)
+  }))
+  const t1 = performance.now()
+  const mask = water.mask(w, s, e, n, width)
+  const [opts, oends] = mask.outlines()
+  const [lpts, lends] = water.lines(w, s, e, n, width)
+  const cov = mask.coverage()
+  const t2 = performance.now()
+
+  canvas.width = mask.width
+  canvas.height = mask.height
+  const g = canvas.getContext('2d')
+  const img = g.createImageData(mask.width, mask.height)
+  let wet = 0
+  for (let i = 0; i < cov.length; i++) {
+    const v = 255 - cov[i] * 60
+    wet += cov[i]
+    img.data[4 * i] = img.data[4 * i + 1] = img.data[4 * i + 2] = v
+    img.data[4 * i + 3] = 255
+  }
+  g.putImageData(img, 0, 0)
+  const polylines = (pts, ends, style) => {
+    g.strokeStyle = style
+    g.lineWidth = 1
+    let a = 0
+    for (const end of ends) {
+      g.beginPath()
+      for (let k = a; k < end; k++) g[k === a ? 'moveTo' : 'lineTo'](pts[2 * k], pts[2 * k + 1])
+      g.stroke()
+      a = end
+    }
+  }
+  polylines(lpts, lends, '#6e6e6e')
+  polylines(opts, oends, '#000')
+  status.textContent =
+    `${mask.width}×${mask.height} px · zoom ${z} · ${count} tiles, ${(bytes / 1024).toFixed(0)} KB · ` +
+    `${water.areaCount} areas, ${water.lineCount} lines · ${(100 * wet / cov.length).toFixed(1)}% water · ` +
+    `${oends.length} shore lines · fetch ${(t1 - t0).toFixed(0)} ms, mask + outlines ${(t2 - t1).toFixed(0)} ms`
+  water.free()
+  mask.free()
+}
+
+form.addEventListener('submit', (ev) => { ev.preventDefault(); draw().catch((e) => { status.textContent = String(e) }) })
+for (const b of form.querySelectorAll('button[data-b]')) {
+  b.addEventListener('click', () => { form.bounds.value = b.dataset.b; form.requestSubmit() })
+}
+draw().catch((e) => { status.textContent = String(e) })
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+/target
+.venv/
+__pycache__/
+*.pyc
+*.so
+*.pyd
+.pytest_cache/
+dist/
+node/node_modules/
+node/*.node
+.DS_Store
+node/npm/
+node/artifacts/
+crates/watermask-wasm/pkg/

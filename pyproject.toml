@@ -1,0 +1,33 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "watermask"
+dynamic = ["version"]
+description = "Water masks, shorelines and distance-to-shore grids for any area, from OpenStreetMap vector tiles fetched on demand"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+keywords = ["gis", "openstreetmap", "coastline", "water", "vector-tiles", "raster"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+dependencies = ["numpy>=1.26"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.urls]
+Repository = "https://github.com/piLeoni/watermask"
+
+[tool.maturin]
+manifest-path = "crates/watermask-py/Cargo.toml"
+python-source = "python"
+module-name = "watermask._watermask"
+include = [{ path = "LICENSE", format = "sdist" }]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
