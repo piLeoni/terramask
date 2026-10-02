@@ -81,6 +81,9 @@ tiles, for free, one small tile at a time.
 outlines, distance, GeoJSON) works the same:
 
 ```python
+import terramask
+
+vineyard = (-70.85, 41.3, -70.45, 41.55)
 land = terramask.fetch(vineyard, width=1200, select="land")             # what the sea leaves
 green = terramask.fetch(vineyard, width=1200, select=["forest", "parks"])
 green.subset("forest")                                                  # one of the two
@@ -111,6 +114,9 @@ Terrain tiles give heights, the sea floor below zero. They are fetched only by
 bands are areas like any other:
 
 ```python
+import terramask
+
+vineyard = (-70.85, 41.3, -70.45, 41.55)
 sea = terramask.fetch(vineyard, width=1200, select="ocean")
 terrain = terramask.fetch_elevation(vineyard, width=1200)
 zones = sea.split(terrain, [-30, -20, -10, -5])   # metres, depths negative
@@ -259,8 +265,11 @@ for your own tiles, `terrain.at(lon, lat)`, `terramask.PRESETS`,
 shapely:
 
 ```python
+import terramask
 from shapely.geometry import shape
 
+vineyard = (-70.85, 41.3, -70.45, 41.55)
+water = terramask.fetch(vineyard, width=1200)
 sea = next(shape(f["geometry"]) for f in water.geojson(bounds=vineyard)["features"]
            if f["properties"]["class"] == "ocean")
 ```
