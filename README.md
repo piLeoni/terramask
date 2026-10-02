@@ -100,12 +100,24 @@ terramask.fetch(vineyard, width=1200, select=["landuse:cemetery", "park:*"])   #
 | `forest`, `glacier`, `wetland`, `sand`, `rock`, `grass`, `farmland` | `landcover:wood`, `:ice`, `:wetland`… |
 | `parks`    | `park:*` (national parks, nature reserves, protected areas) |
 | `urban`    | `landuse:residential,commercial,industrial,retail`        |
+| `buildings`| `building:*`                                              |
+| `roads`    | `transportation:motorway,trunk,primary,secondary,tertiary,minor,service,busway,raceway` |
+| `paths`    | `transportation:path,track`                               |
+| `rail`     | `transportation:rail,transit`                             |
 
 Any layer and class of the [OpenMapTiles schema](https://openmaptiles.org/schema/)
-can be named as `layer:class,class`, or `layer:*` for all of it. Only the
-layers asked for are downloaded and cached, each on its own, so asking for
-forests after water fetches the tiles once more, and only their `landcover`.
-GeoJSON features carry `layer` and `class`.
+can be named as `layer:class,class`, or `layer:*` for all of it. A name picks
+a class or a subclass: city parks are `landcover:park` (subclass `park` of
+class `grass`), footways `transportation:footway`. Only the layers asked for
+are downloaded and cached, each on its own, so asking for forests after water
+fetches the tiles once more, and only their `landcover`. GeoJSON features
+carry `layer`, `class`, `subclass` and the other attributes of the tile
+(`brunnel`, `render_height`…; names in other languages are left out).
+
+Tiles cut every feature at their edges. `merged` joins the pieces of each
+class into one shape, which suits masks and coastlines; `joined` mends each
+feature on its own, so two buildings sharing a wall stay two, and strings a
+road's pieces back into one line across the tile edges.
 
 ## Depth and height bands
 
@@ -205,7 +217,7 @@ any projection instead.
 
 ```toml
 [dependencies]
-terramask = "0.1"          # default-features = false drops the HTTP client and terrain
+terramask = "0.2"          # default-features = false drops the HTTP client and terrain
 ```
 
 Features: `fetch` (download and cache tiles) and `dem` (terrain, elevation
@@ -228,6 +240,10 @@ let tm = water.mask_with(800, 600, &MaskOptions::default(), |lon, lat| my_projec
 
 // Polygons: joined per class and cut to the box (Features::merged gives the same as structs).
 let json = water.to_geojson(&GeoJsonOptions { bounds: Some(bounds), ..Default::default() });
+
+// Buildings and roads one by one, mended across tile edges, with their attributes.
+let town = Fetcher::new().water(bounds, 14, &Filter::parse(&["buildings", "roads"])?, |_, _| {})?.joined(Some(bounds));
+let bridges = town.lines.iter().filter(|l| l.tag("brunnel") == Some("bridge"));
 
 // Other layers, and depth bands from terrain fetched only here.
 let fetcher = Fetcher::new();

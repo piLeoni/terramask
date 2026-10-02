@@ -6,7 +6,9 @@ use crate::Error;
 /// Not a tile layer: each tile's square less its sea (`water`, class `ocean`).
 pub const LAND: &str = "land";
 
-/// Named selections, as rules: `layer:class,class` or `layer:*`.
+/// Named selections, as rules: `layer:class,class` or `layer:*`. A name in a
+/// rule picks a class or a subclass: `landcover:park` is the parks among
+/// landcover `grass`.
 pub const PRESETS: &[(&str, &str)] = &[
     ("water", "water:ocean,lake,river,dock waterway:river,canal,stream"),
     ("ocean", "water:ocean"),
@@ -22,9 +24,14 @@ pub const PRESETS: &[(&str, &str)] = &[
     ("farmland", "landcover:farmland"),
     ("parks", "park:*"),
     ("urban", "landuse:residential,commercial,industrial,retail"),
+    ("buildings", "building:*"),
+    ("roads", "transportation:motorway,trunk,primary,secondary,tertiary,minor,service,busway,raceway"),
+    ("paths", "transportation:path,track"),
+    ("rail", "transportation:rail,transit"),
 ];
 
-/// Features of one layer whose class is listed; no classes keeps them all.
+/// Features of one layer whose class or subclass is listed; no names keeps
+/// them all.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rule {
     pub layer: String,
@@ -37,7 +44,13 @@ impl Rule {
     }
 
     pub fn matches(&self, layer: &str, class: &str) -> bool {
-        self.layer == layer && (self.classes.is_empty() || self.classes.iter().any(|c| c == class))
+        self.keeps(layer, class, "")
+    }
+
+    /// Whether a feature of `layer` with this class and subclass passes.
+    pub fn keeps(&self, layer: &str, class: &str, subclass: &str) -> bool {
+        self.layer == layer
+            && (self.classes.is_empty() || self.classes.iter().any(|c| c == class || (!subclass.is_empty() && c == subclass)))
     }
 
     fn parse(s: &str) -> Result<Rule, Error> {
@@ -71,7 +84,8 @@ pub struct Filter {
     pub rules: Vec<Rule>,
     /// Keep water that is only there part of the year.
     pub intermittent: bool,
-    /// Keep water that runs underground (culverts, covered channels).
+    /// Keep water that runs underground (culverts, covered channels). Roads
+    /// and railways in tunnels are kept either way, with `brunnel=tunnel`.
     pub tunnels: bool,
 }
 
@@ -127,7 +141,12 @@ impl Filter {
     }
 
     pub fn matches(&self, layer: &str, class: &str) -> bool {
-        self.rules.iter().any(|r| r.matches(layer, class))
+        self.keeps(layer, class, "")
+    }
+
+    /// Whether a feature of `layer` with this class and subclass passes.
+    pub fn keeps(&self, layer: &str, class: &str, subclass: &str) -> bool {
+        self.rules.iter().any(|r| r.keeps(layer, class, subclass))
     }
 
     /// Whether land is asked for (see [`LAND`]).
@@ -160,6 +179,16 @@ mod tests {
         assert!(f.land());
         assert_eq!(f.layers(), ["water", "waterway", "park"]);
         assert_eq!(Filter::parse(&["water"]).unwrap(), Filter::default());
+    }
+
+    #[test]
+    fn names_pick_classes_or_subclasses() {
+        let f = Filter::parse(&["landcover:park,wood", "buildings", "roads"]).unwrap();
+        assert!(f.keeps("landcover", "grass", "park") && f.keeps("landcover", "wood", "forest"));
+        assert!(!f.keeps("landcover", "grass", "garden") && !f.matches("landcover", "grass"));
+        assert!(f.keeps("building", "", "") && f.keeps("transportation", "minor", "residential"));
+        assert!(!f.keeps("transportation", "path", "footway"));
+        assert_eq!(f.layers(), ["landcover", "building", "transportation"]);
     }
 
     #[test]

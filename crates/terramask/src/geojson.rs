@@ -42,8 +42,14 @@ fn quoted(s: &str) -> String {
     q
 }
 
-fn properties(out: &mut String, layer: &str, class: &str, elevation: Option<[f64; 2]>) {
+fn properties(out: &mut String, layer: &str, class: &str, subclass: &str, tags: &[(String, String)], elevation: Option<[f64; 2]>) {
     let _ = write!(out, "\"properties\":{{\"layer\":{},\"class\":{}", quoted(layer), quoted(class));
+    if !subclass.is_empty() {
+        let _ = write!(out, ",\"subclass\":{}", quoted(subclass));
+    }
+    for (k, v) in tags.iter().filter(|(k, _)| !matches!(k.as_str(), "layer" | "class" | "subclass" | "min" | "max")) {
+        let _ = write!(out, ",{}:{}", quoted(k), quoted(v));
+    }
     if let Some(band) = elevation {
         for (k, v) in [("min", band[0]), ("max", band[1])] {
             if v.is_finite() {
@@ -77,7 +83,7 @@ pub fn write(w: &Features) -> String {
         }
         sep(&mut out);
         out.push_str("{\"type\":\"Feature\",");
-        properties(&mut out, &a.layer, &a.class, a.elevation);
+        properties(&mut out, &a.layer, &a.class, &a.subclass, &a.tags, a.elevation);
         out.push_str(",\"geometry\":{\"type\":\"MultiPolygon\",\"coordinates\":[");
         for (i, p) in polys.iter().enumerate() {
             if i > 0 {
@@ -97,7 +103,7 @@ pub fn write(w: &Features) -> String {
     for l in &w.lines {
         sep(&mut out);
         out.push_str("{\"type\":\"Feature\",");
-        properties(&mut out, &l.layer, &l.class, None);
+        properties(&mut out, &l.layer, &l.class, &l.subclass, &l.tags, None);
         out.push_str(",\"geometry\":{\"type\":\"LineString\",\"coordinates\":");
         coords(&mut out, &l.points, false);
         out.push_str("}}");

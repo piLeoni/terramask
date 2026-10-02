@@ -84,28 +84,94 @@ pub struct Ring {
 /// One area, as cut by its tile.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Area {
-    /// Tile layer (`water`, `landcover`, `park`…), or [`LAND`].
+    /// Tile layer (`water`, `landcover`, `building`…), or [`LAND`].
     pub layer: String,
+    /// Empty where the layer has none (`building`).
     pub class: String,
+    /// The finer kind some layers give: `park` or `garden` under landcover
+    /// `grass`, `footway` under transportation `path`. Empty when none.
+    pub subclass: String,
+    /// The feature's other attributes as text (`brunnel`, `render_height`,
+    /// `name`…), sorted by key. Names in other languages are left out.
+    pub tags: Vec<(String, String)>,
     pub rings: Vec<Ring>,
     /// Elevation band in metres, lowest and highest, open ends infinite:
     /// set by [`Features::split`].
     pub elevation: Option<[f64; 2]>,
+    /// The tile that cut this piece out; `None` once joined or merged.
+    pub tile: Option<TileId>,
 }
 
 impl Area {
+    pub fn new(layer: &str, class: &str, rings: Vec<Ring>) -> Area {
+        Area {
+            layer: layer.into(),
+            class: class.into(),
+            subclass: String::new(),
+            tags: Vec::new(),
+            rings,
+            elevation: None,
+            tile: None,
+        }
+    }
+
+    /// The value of attribute `key`.
+    pub fn tag(&self, key: &str) -> Option<&str> {
+        tag(&self.tags, key)
+    }
+
     fn without_rings(&self) -> Area {
-        Area { layer: self.layer.clone(), class: self.class.clone(), rings: Vec::new(), elevation: self.elevation }
+        Area {
+            layer: self.layer.clone(),
+            class: self.class.clone(),
+            subclass: self.subclass.clone(),
+            tags: self.tags.clone(),
+            rings: Vec::new(),
+            elevation: self.elevation,
+            tile: None,
+        }
     }
 }
 
-/// One line (a waterway centre line, say), as cut by its tile, in Web
+/// One line (a waterway centre line, a road), as cut by its tile, in Web
 /// Mercator metres.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Line {
     pub layer: String,
     pub class: String,
+    /// As for [`Area::subclass`].
+    pub subclass: String,
+    /// As for [`Area::tags`].
+    pub tags: Vec<(String, String)>,
     pub points: Vec<[f64; 2]>,
+    /// The tile that cut this piece out; `None` once joined.
+    pub tile: Option<TileId>,
+}
+
+impl Line {
+    pub fn new(layer: &str, class: &str, points: Vec<[f64; 2]>) -> Line {
+        Line { layer: layer.into(), class: class.into(), subclass: String::new(), tags: Vec::new(), points, tile: None }
+    }
+
+    /// The value of attribute `key`.
+    pub fn tag(&self, key: &str) -> Option<&str> {
+        tag(&self.tags, key)
+    }
+
+    fn without_points(&self) -> Line {
+        Line {
+            layer: self.layer.clone(),
+            class: self.class.clone(),
+            subclass: self.subclass.clone(),
+            tags: self.tags.clone(),
+            points: Vec::new(),
+            tile: self.tile,
+        }
+    }
+}
+
+fn tag<'a>(tags: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    tags.binary_search_by(|(k, _)| k.as_str().cmp(key)).ok().map(|i| tags[i].1.as_str())
 }
 
 /// Areas and lines collected from tiles. Each tile's features are cut to the
@@ -133,27 +199,27 @@ impl Features {
         let to_merc = |pts: Vec<[f64; 2]>| pts.into_iter().map(|p| [x0 + p[0] * size, y1 - p[1] * size]).collect();
         let ring = |r: Ring| Ring { exterior: r.exterior, points: to_merc(r.points) };
         for a in t.areas {
-            self.areas.push(Area { rings: a.rings.into_iter().map(ring).collect(), ..a });
+            self.areas.push(Area { rings: a.rings.into_iter().map(ring).collect(), tile: Some(id), ..a });
         }
         for l in t.lines {
-            self.lines.push(Line { points: to_merc(l.points), ..l });
+            self.lines.push(Line { points: to_merc(l.points), tile: Some(id), ..l });
         }
         if filter.land() {
             let sea: Vec<Ring> = t.sea.into_iter().map(ring).collect();
             let rings = merge::overlay(&merge::rect(id.merc_bounds()), &merge::paths(&sea), OverlayRule::Difference);
             if !rings.is_empty() {
-                self.areas.push(Area { layer: LAND.into(), class: LAND.into(), rings, elevation: None });
+                self.areas.push(Area { tile: Some(id), ..Area::new(LAND, LAND, rings) });
             }
         }
         Ok(())
     }
 
-    /// The areas and lines whose layer and class pass `filter` (its
-    /// `intermittent` and `tunnels` play no part here).
+    /// The areas and lines whose layer and class (or subclass) pass `filter`
+    /// (its `intermittent` and `tunnels` play no part here).
     pub fn subset(&self, filter: &Filter) -> Features {
         Features {
-            areas: self.areas.iter().filter(|a| filter.matches(&a.layer, &a.class)).cloned().collect(),
-            lines: self.lines.iter().filter(|l| filter.matches(&l.layer, &l.class)).cloned().collect(),
+            areas: self.areas.iter().filter(|a| filter.keeps(&a.layer, &a.class, &a.subclass)).cloned().collect(),
+            lines: self.lines.iter().filter(|l| filter.keeps(&l.layer, &l.class, &l.subclass)).cloned().collect(),
         }
     }
 
@@ -205,8 +271,21 @@ impl Features {
     /// The areas of each layer, class and elevation band joined across tile
     /// edges into one [`Area`], each exterior ring followed by its holes;
     /// with `bounds`, areas and lines cut to that box. Lines are not joined.
+    /// The subclass and tags of a joined area are those its pieces share.
     pub fn merged(&self, bounds: Option<Bounds>) -> Features {
         self.reshaped(true, bounds)
+    }
+
+    /// Each feature whole again, and apart from its neighbours: the pieces
+    /// tiles cut a building, a park or a road into are joined across the tile
+    /// edges, while two buildings sharing a wall, or a park beside a garden,
+    /// stay two areas. Areas keep their subclass and tags; one area per
+    /// polygon (exterior ring and its holes). Lines with the same layer,
+    /// class, subclass and tags whose cut ends meet on a tile edge become one
+    /// line. With `bounds`, everything is cut to that box.
+    pub fn joined(&self, bounds: Option<Bounds>) -> Features {
+        let clip = bounds.map(|b| tile::merc_extent(&b));
+        Features { areas: merge::join_areas(&self.areas, clip), lines: merge::join_lines(&self.lines, clip) }
     }
 
     /// Areas and lines cut to `bounds`, the tile pieces kept apart.

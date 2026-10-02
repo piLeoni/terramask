@@ -407,12 +407,7 @@ mod tests {
         let e = cone();
         let b = TileId::new(10, 300, 400).merc_bounds();
         let all = Features {
-            areas: vec![crate::Area {
-                layer: "land".into(),
-                class: "land".into(),
-                rings: vec![crate::Ring { exterior: true, points: rect(b).remove(0) }],
-                elevation: None,
-            }],
+            areas: vec![crate::Area::new("land", "land", vec![crate::Ring { exterior: true, points: rect(b).remove(0) }])],
             lines: vec![],
         };
         let bands = all.split(&e, &[50.0, 25.0, 75.0]).unwrap();

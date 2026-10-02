@@ -822,7 +822,7 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
 name = "terramask"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "i_overlay",
@@ -833,7 +833,7 @@ dependencies = [
 
 [[package]]
 name = "terramask-node"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "terramask-py"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "pyo3",
  "terramask",
@@ -851,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "terramask-wasm"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "js-sys",
  "terramask",

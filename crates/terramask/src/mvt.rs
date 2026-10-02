@@ -96,6 +96,21 @@ impl Value {
             Value::Bool(b) => *b,
         }
     }
+
+    fn text(&self) -> String {
+        match self {
+            Value::Str(s) => s.clone(),
+            Value::Num(n) if n.fract() == 0.0 && n.abs() < 1e15 => format!("{}", *n as i64),
+            Value::Num(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+        }
+    }
+}
+
+/// Names in other languages (`name:de`, `name_en`, `name_int`…): dozens per
+/// feature in some layers, and no use for drawing.
+fn translated_name(key: &str) -> bool {
+    key.starts_with("name:") || key.starts_with("name_")
 }
 
 fn read_layer(buf: &[u8], filter: &Filter, out: &mut TileFeatures) -> Result<(), String> {
@@ -122,26 +137,48 @@ fn read_layer(buf: &[u8], filter: &Filter, out: &mut TileFeatures) -> Result<(),
     }
     let extent = extent.max(1) as f64;
     let unit = |pts: Vec<[f64; 2]>| pts.into_iter().map(|p| [p[0] / extent, p[1] / extent]).collect::<Vec<_>>();
+    // The intermittent and tunnel switches are about water.
+    let water = name == "water" || name == "waterway";
     for f in features {
         let (tags, kind, geom) = read_feature(f)?;
-        let mut class = String::new();
+        let (mut class, mut subclass) = (String::new(), String::new());
+        let mut attrs: Vec<(String, String)> = Vec::new();
         let (mut intermittent, mut tunnel) = (false, false);
         for i in (1..tags.len()).step_by(2) {
             let (Some(k), Some(v)) = (keys.get(tags[i - 1] as usize), values.get(tags[i] as usize)) else { continue };
             match (k.as_str(), v) {
                 ("class", Value::Str(s)) => class = s.clone(),
-                ("intermittent", v) => intermittent = v.truthy(),
-                ("brunnel", Value::Str(s)) => tunnel = s == "tunnel",
-                _ => {}
+                ("subclass", Value::Str(s)) => subclass = s.clone(),
+                (k, _) if translated_name(k) => {}
+                (k, v) => {
+                    match k {
+                        "intermittent" => intermittent = v.truthy(),
+                        "brunnel" => tunnel = matches!(v, Value::Str(s) if s == "tunnel"),
+                        _ => {}
+                    }
+                    attrs.push((k.to_string(), v.text()));
+                }
             }
         }
         let sea = land && kind == 3 && class == "ocean";
-        let keep = filter.matches(&name, &class) && !(intermittent && !filter.intermittent) && !(tunnel && !filter.tunnels);
+        let keep = filter.keeps(&name, &class, &subclass)
+            && !(water && intermittent && !filter.intermittent)
+            && !(water && tunnel && !filter.tunnels);
+        if keep {
+            attrs.sort();
+        }
         match kind {
             2 if keep => {
                 for part in decode(&geom)? {
                     for piece in clip_line(&part, [0.0, 0.0, extent, extent]) {
-                        out.lines.push(Line { layer: name.clone(), class: class.clone(), points: unit(piece) });
+                        out.lines.push(Line {
+                            layer: name.clone(),
+                            class: class.clone(),
+                            subclass: subclass.clone(),
+                            tags: attrs.clone(),
+                            points: unit(piece),
+                            tile: None,
+                        });
                     }
                 }
             }
@@ -160,7 +197,7 @@ fn read_layer(buf: &[u8], filter: &Filter, out: &mut TileFeatures) -> Result<(),
                     out.sea.extend(rings.iter().cloned());
                 }
                 if keep && !rings.is_empty() {
-                    out.areas.push(Area { layer: name.clone(), class, rings, elevation: None });
+                    out.areas.push(Area { subclass, tags: attrs, ..Area::new(&name, &class, rings) });
                 }
             }
             _ => {}
