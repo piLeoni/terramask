@@ -133,10 +133,14 @@ at the edge of the tiles) and are intersected with the area, so together they
 cover it exactly and do not overlap. Where the terrain puts sea above sea
 level, as it can near a shore, those bits fall in the highest band.
 
-By default the zoom stops at 10 (about 150 m per pixel at the equator): from
-11 on, some coasts, much of the US for one, come from land surveys that
-flatten the sea to 0 m, and the sea floor has no more detail deeper anyway.
-For detailed land heights pass `max_zoom` up to 15.
+By default the zoom stops at 10 (about 150 m per pixel at the equator), as
+the sea floor has no more detail deeper. For detailed land heights pass
+`max_zoom` up to 15. From 11 on, some coasts, much of the US for one, come
+from land surveys that flatten the sea to 0 m; the fetcher puts the sea floor
+back there from the zoom-10 tiles (in Rust, `Elevation::fill_sea` does it for
+tiles you read yourself). For terrain magnified past its pixels,
+`Elevation::cubic(true)` samples with Catmull-Rom instead of bilinear, so
+slopes have no creases at pixel edges.
 
 ## Where the data comes from
 

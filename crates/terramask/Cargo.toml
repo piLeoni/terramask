@@ -16,6 +16,14 @@ fetch = ["dep:ureq"]
 # Elevation from terrain tiles (Terrarium PNG), to cut areas into depth or height bands.
 dem = ["dep:png"]
 
+[[example]]
+name = "readme"
+required-features = ["fetch", "dem"]
+
+[[example]]
+name = "render"
+required-features = ["fetch"]
+
 [dependencies]
 flate2 = "1"
 i_overlay = "9"

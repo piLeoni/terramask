@@ -65,6 +65,12 @@ impl TileId {
         let y1 = WORLD / 2.0 - self.y as f64 * s;
         [x0, y1 - s, x0 + s, y1]
     }
+
+    /// The tile at zoom `z` (at most this one's) that holds this one.
+    pub fn ancestor(&self, z: u8) -> TileId {
+        let up = self.z.saturating_sub(z);
+        TileId { z: self.z - up, x: self.x >> up, y: self.y >> up }
+    }
 }
 
 impl fmt::Display for TileId {

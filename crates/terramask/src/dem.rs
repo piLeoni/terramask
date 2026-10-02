@@ -20,7 +20,8 @@ pub const TERRARIUM_MAX_ZOOM: u8 = 15;
 /// Deepest zoom read by default. From zoom 11 on, some coasts (much of the
 /// US) come from land surveys that flatten the sea to 0 m; up to 10 the sea
 /// floor is there everywhere, and it has no more detail deeper down. Land
-/// heights do: go deeper for those.
+/// heights do: go deeper for those, and [`crate::Fetcher`] puts the sea
+/// floor back from zoom 10 (see [`Elevation::fill_sea`]).
 pub const TERRARIUM_ZOOM: u8 = 10;
 
 /// Below any level: the frame that closes every band at the edge of the tiles.
@@ -33,11 +34,54 @@ pub struct Elevation {
     zoom: u8,
     size: usize,
     tiles: HashMap<(u32, u32), Vec<f32>>,
+    cubic: bool,
 }
 
 impl Elevation {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Sample with Catmull-Rom between pixel centres instead of bilinear:
+    /// slopes without creases where the terrain is magnified past its
+    /// pixels, which contours and lines drawn along the slope would follow.
+    pub fn cubic(mut self, on: bool) -> Self {
+        self.cubic = on;
+        self
+    }
+
+    pub fn zoom(&self) -> u8 {
+        self.zoom
+    }
+
+    /// The tiles holding sea at exactly 0 m: above zoom [`TERRARIUM_ZOOM`]
+    /// Terrarium has whole tiles of open sea flattened to sea level, which
+    /// [`Elevation::fill_sea`] can take back from a coarser zoom.
+    pub fn flat_sea_tiles(&self) -> Vec<TileId> {
+        let mut ids: Vec<TileId> =
+            self.tiles.iter().filter(|(_, t)| t.contains(&0.0)).map(|(&(x, y), _)| TileId::new(self.zoom, x, y)).collect();
+        ids.sort_by_key(|t| (t.y, t.x));
+        ids
+    }
+
+    /// Pixels at exactly 0 m take `coarser`'s height where that is below sea
+    /// level: the sea floor back under flattened sea. Land, and sea that is
+    /// 0 m in `coarser` too, stay as they are.
+    pub fn fill_sea(&mut self, coarser: &Elevation) {
+        if coarser.is_empty() || self.is_empty() {
+            return;
+        }
+        let (res, [ox, oy]) = self.frame();
+        let s = self.size;
+        for (&(tx, ty), t) in self.tiles.iter_mut() {
+            for (i, v) in t.iter_mut().enumerate().filter(|(_, v)| **v == 0.0) {
+                let (gx, gy) = ((tx as usize * s + i % s) as f64 + 0.5, (ty as usize * s + i / s) as f64 + 0.5);
+                let e = coarser.sample([ox + gx * res, oy - gy * res]);
+                if e < 0.0 {
+                    *v = e;
+                }
+            }
+        }
     }
 
     /// Read a Terrarium PNG: metres = R × 256 + G + B / 256 − 32768.
@@ -91,7 +135,8 @@ impl Elevation {
         }
     }
 
-    /// Bilinear between pixel centres; NaN outside the tiles.
+    /// Bilinear (or Catmull-Rom, see [`Elevation::cubic`]) between pixel
+    /// centres; NaN outside the tiles.
     fn sample(&self, p: [f64; 2]) -> f32 {
         if self.tiles.is_empty() {
             return f32::NAN;
@@ -101,6 +146,18 @@ impl Elevation {
         let (x, y) = (fx.floor(), fy.floor());
         let (tx, ty) = ((fx - x) as f32, (fy - y) as f32);
         let (x, y) = (x as i64, y as i64);
+        if self.cubic {
+            let (wx, wy) = (catmull_rom(tx), catmull_rom(ty));
+            let mut sum = 0.0;
+            for (j, wy) in wy.iter().enumerate() {
+                for (i, wx) in wx.iter().enumerate() {
+                    sum += wx * wy * self.value(x - 1 + i as i64, y - 1 + j as i64);
+                }
+            }
+            if sum.is_finite() {
+                return sum;
+            }
+        }
         let [a, b, c, d] = [self.value(x, y), self.value(x + 1, y), self.value(x, y + 1), self.value(x + 1, y + 1)];
         if [a, b, c, d].iter().all(|v| v.is_finite()) {
             (a * (1.0 - tx) + b * tx) * (1.0 - ty) + (c * (1.0 - tx) + d * tx) * ty
@@ -186,6 +243,12 @@ impl Field {
             .map(|l| l[..l.len() - 1].iter().map(|p| [ox + p[0] as f64 * self.res, oy - p[1] as f64 * self.res]).collect())
             .collect()
     }
+}
+
+/// Catmull-Rom weights of the four samples around fraction `t`.
+fn catmull_rom(t: f32) -> [f32; 4] {
+    let (t2, t3) = (t * t, t * t * t);
+    [0.5 * (-t3 + 2.0 * t2 - t), 0.5 * (3.0 * t3 - 5.0 * t2 + 2.0), 0.5 * (-3.0 * t3 + 4.0 * t2 + t), 0.5 * (t3 - t2)]
 }
 
 /// Size and heights of a square Terrarium PNG.
@@ -319,5 +382,59 @@ mod tests {
         assert!(Elevation::new().add_heights(TileId::new(10, 0, 0), 4, vec![0.0; 3]).is_err());
         let mut mixed = cone();
         assert!(mixed.add_heights(TileId::new(11, 0, 0), 64, vec![0.0; 64 * 64]).is_err());
+    }
+
+    #[test]
+    fn flattened_sea_takes_the_floor_from_the_coarser_zoom() {
+        // Zoom 11: land on the west half, sea flattened to 0 m on the east.
+        let s = 8;
+        let fine = (0..s * s).map(|i| if i % s < s / 2 { 20.0 } else { 0.0 }).collect();
+        let mut e = Elevation::new();
+        let id = TileId::new(11, 600, 800);
+        e.add_heights(id, s, fine).unwrap();
+        assert_eq!(e.flat_sea_tiles(), [id]);
+        assert_eq!(id.ancestor(10), TileId::new(10, 300, 400));
+        let mut coarse = Elevation::new();
+        coarse.add_heights(id.ancestor(10), s, vec![-40.0; s * s]).unwrap();
+        e.fill_sea(&coarse);
+        let [x0, y0, x1, y1] = id.merc_bounds();
+        let at = |fx: f64| {
+            let [lon, lat] = crate::merc_to_lonlat(x0 + fx * (x1 - x0), (y0 + y1) / 2.0);
+            e.at(lon, lat)
+        };
+        assert_eq!((at(0.2), at(0.8)), (20.0, -40.0));
+        assert!(e.flat_sea_tiles().is_empty());
+    }
+
+    #[test]
+    fn cubic_keeps_ramps_and_smooths_corners() {
+        let s = 16;
+        let ramp: Vec<f32> = (0..s * s).map(|i| (i % s) as f32 * 10.0).collect();
+        let id = TileId::new(10, 300, 400);
+        let mut e = Elevation::new();
+        e.add_heights(id, s, ramp).unwrap();
+        let e = e.cubic(true);
+        let [x0, y0, x1, y1] = id.merc_bounds();
+        let (px, py) = ((x1 - x0) / s as f64, (y1 - y0) / s as f64);
+        for fx in [5.1, 7.5, 9.9] {
+            let [lon, lat] = crate::merc_to_lonlat(x0 + fx * px, y1 - 7.3 * py);
+            assert!((e.at(lon, lat) - (fx as f32 - 0.5) * 10.0).abs() < 1e-3);
+        }
+        // At the edge, where there are no four neighbours, bilinear.
+        let [lon, lat] = crate::merc_to_lonlat(x0 + 0.75 * px, y1 - 7.3 * py);
+        assert!((e.at(lon, lat) - 2.5).abs() < 1e-3);
+        // Over the cone's peak the cubic bends less sharply than bilinear.
+        let (lin, cub) = (cone(), cone().cubic(true));
+        let rough = |e: &Elevation| {
+            let [x0, y0, x1, y1] = TileId::new(10, 300, 400).merc_bounds();
+            let h: Vec<f32> = (0..400)
+                .map(|i| {
+                    let [lon, lat] = crate::merc_to_lonlat(x0 + (x1 - x0) * (0.3 + i as f64 / 1000.0), (y0 + y1) / 2.0);
+                    e.at(lon, lat)
+                })
+                .collect();
+            h.windows(3).map(|w| (w[0] - 2.0 * w[1] + w[2]).abs()).fold(0.0, f32::max)
+        };
+        assert!(rough(&cub) < rough(&lin), "{} vs {}", rough(&cub), rough(&lin));
     }
 }

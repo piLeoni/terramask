@@ -26,9 +26,9 @@ pub struct Fetcher {
     /// [`Fetcher::elevation`] and [`Fetcher::elevation_for`].
     #[cfg(feature = "dem")]
     pub elevation_source: String,
-    /// Deepest terrain zoom read; [`TERRARIUM_ZOOM`] by default, which keeps
-    /// the sea floor everywhere. Up to [`crate::TERRARIUM_MAX_ZOOM`] for
-    /// detailed land heights.
+    /// Deepest terrain zoom read; [`TERRARIUM_ZOOM`] by default. Up to
+    /// [`crate::TERRARIUM_MAX_ZOOM`] for detailed land heights: the sea
+    /// floor flattened at those zooms is taken from zoom 10.
     #[cfg(feature = "dem")]
     pub elevation_max_zoom: u8,
     /// Where tiles are kept between runs; `None` downloads every time. Of
@@ -237,8 +237,27 @@ impl Fetcher {
         self.elevation_from(&tiles_for(&grid.bounds, z), progress)
     }
 
+    /// Deeper than [`TERRARIUM_ZOOM`], tiles with sea flattened to 0 m take
+    /// the sea floor back from their zoom-10 ancestors (see
+    /// [`Elevation::fill_sea`]); `progress` counts those tiles too.
     #[cfg(feature = "dem")]
     fn elevation_from(&self, ids: &[TileId], progress: impl Fn(usize, usize) + Sync) -> Result<Elevation, Error> {
+        let mut out = self.elevation_tiles(ids, &progress)?;
+        if out.zoom() > TERRARIUM_ZOOM {
+            let mut up: Vec<TileId> = out.flat_sea_tiles().iter().map(|t| t.ancestor(TERRARIUM_ZOOM)).collect();
+            up.sort();
+            up.dedup();
+            if !up.is_empty() {
+                let n = ids.len();
+                let coarser = self.elevation_tiles(&up, &|done, total| progress(n + done, n + total))?;
+                out.fill_sea(&coarser);
+            }
+        }
+        Ok(out)
+    }
+
+    #[cfg(feature = "dem")]
+    fn elevation_tiles(&self, ids: &[TileId], progress: &(impl Fn(usize, usize) + Sync)) -> Result<Elevation, Error> {
         let tiles = self.fetch_all(ids, |id| self.elevation_tile(id).map(|(b, _)| b), progress)?;
         let mut out = Elevation::new();
         for (id, png) in ids.iter().zip(tiles) {

@@ -1,6 +1,6 @@
 {
   "name": "@pileoni/terramask",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Masks, outlines, polygons and distance grids of water, land, forests, parks or any OpenStreetMap layer, for any area, from vector tiles fetched on demand; depth and height bands from terrain tiles",
   "main": "index.js",
   "types": "index.d.ts",
