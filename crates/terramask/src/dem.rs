@@ -5,6 +5,7 @@
 //! the terrain only decides where one band gives way to the next.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use i_overlay::core::overlay_rule::OverlayRule;
 
@@ -35,6 +36,30 @@ pub struct Elevation {
     size: usize,
     tiles: HashMap<(u32, u32), Vec<f32>>,
     cubic: bool,
+    /// The tiles stitched into one grid on the first sample, so sampling
+    /// costs no lookups; `None` where they are too scattered for that.
+    mosaic: OnceLock<Option<Mosaic>>,
+}
+
+#[derive(Debug, Clone)]
+struct Mosaic {
+    /// World pixel of the grid's top-left corner.
+    gx0: i64,
+    gy0: i64,
+    w: i64,
+    h: i64,
+    values: Vec<f32>,
+}
+
+impl Mosaic {
+    fn value(&self, gx: i64, gy: i64) -> f32 {
+        let (x, y) = (gx - self.gx0, gy - self.gy0);
+        if x < 0 || y < 0 || x >= self.w || y >= self.h {
+            f32::NAN
+        } else {
+            self.values[(y * self.w + x) as usize]
+        }
+    }
 }
 
 impl Elevation {
@@ -82,6 +107,7 @@ impl Elevation {
                 }
             }
         }
+        self.mosaic = OnceLock::new();
     }
 
     /// Read a Terrarium PNG: metres = R × 256 + G + B / 256 − 32768.
@@ -105,6 +131,7 @@ impl Elevation {
         self.zoom = id.z;
         self.size = size;
         self.tiles.insert((id.x, id.y), heights);
+        self.mosaic = OnceLock::new();
         Ok(())
     }
 
@@ -125,6 +152,37 @@ impl Elevation {
 
     /// A pixel of the whole world at this zoom; NaN where there is no tile.
     fn value(&self, gx: i64, gy: i64) -> f32 {
+        match self.mosaic.get_or_init(|| self.stitch()) {
+            Some(m) => m.value(gx, gy),
+            None => self.tile_value(gx, gy),
+        }
+    }
+
+    /// The tiles in one grid over their bounding rectangle, NaN where one is
+    /// missing; `None` when that rectangle would be mostly holes.
+    fn stitch(&self) -> Option<Mosaic> {
+        let s = self.size as i64;
+        let xs = self.tiles.keys().map(|k| k.0 as i64);
+        let ys = self.tiles.keys().map(|k| k.1 as i64);
+        let (tx0, tx1) = (xs.clone().min()?, xs.max()?);
+        let (ty0, ty1) = (ys.clone().min()?, ys.max()?);
+        let (nx, ny) = (tx1 - tx0 + 1, ty1 - ty0 + 1);
+        if (nx * ny) as usize > 4 * self.tiles.len() {
+            return None;
+        }
+        let (w, h) = (nx * s, ny * s);
+        let mut values = vec![f32::NAN; (w * h) as usize];
+        for (&(tx, ty), t) in &self.tiles {
+            let (ox, oy) = ((tx as i64 - tx0) * s, (ty as i64 - ty0) * s);
+            for (r, row) in t.chunks_exact(s as usize).enumerate() {
+                let at = ((oy + r as i64) * w + ox) as usize;
+                values[at..at + s as usize].copy_from_slice(row);
+            }
+        }
+        Some(Mosaic { gx0: tx0 * s, gy0: ty0 * s, w, h, values })
+    }
+
+    fn tile_value(&self, gx: i64, gy: i64) -> f32 {
         let s = self.size as i64;
         if gx < 0 || gy < 0 || s == 0 {
             return f32::NAN;
@@ -382,6 +440,25 @@ mod tests {
         assert!(Elevation::new().add_heights(TileId::new(10, 0, 0), 4, vec![0.0; 3]).is_err());
         let mut mixed = cone();
         assert!(mixed.add_heights(TileId::new(11, 0, 0), 64, vec![0.0; 64 * 64]).is_err());
+    }
+
+    #[test]
+    fn tiles_added_after_sampling_and_scattered_tiles_are_read() {
+        let centre = |id: TileId| {
+            let [x0, y0, x1, y1] = id.merc_bounds();
+            crate::merc_to_lonlat((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+        };
+        let (a, b, far) = (TileId::new(10, 300, 400), TileId::new(10, 301, 400), TileId::new(10, 900, 100));
+        let mut e = Elevation::new();
+        e.add_heights(a, 4, vec![1.0; 16]).unwrap();
+        let [lon, lat] = centre(b);
+        assert!(e.at(lon, lat).is_nan());
+        e.add_heights(b, 4, vec![2.0; 16]).unwrap();
+        assert_eq!(e.at(lon, lat), 2.0);
+        e.add_heights(far, 4, vec![3.0; 16]).unwrap();
+        let [lon, lat] = centre(far);
+        assert_eq!(e.at(lon, lat), 3.0);
+        assert!(e.stitch().is_none());
     }
 
     #[test]
