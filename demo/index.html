@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>watermask demo</title>
+<title>terramask demo</title>
 <style>
   body { font: 13px/1.4 ui-monospace, Menlo, monospace; margin: 16px; color: #000; background: #fff; }
   form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
@@ -30,7 +30,7 @@
 <p>Map data © OpenMapTiles © OpenStreetMap contributors, via OpenFreeMap.</p>
 
 <script type="module">
-import init, { Water, zoomFor, tilesFor, tileUrl } from './pkg/watermask_wasm.js'
+import init, { Features, zoomFor, tilesFor, tileUrl } from './pkg/terramask_wasm.js'
 
 const TILEJSON = 'https://tiles.openfreemap.org/planet'
 const form = document.getElementById('f')
@@ -49,7 +49,7 @@ async function draw() {
   const ids = tilesFor(w, s, e, n, z)
   const count = ids.length / 3
   status.textContent = `Fetching ${count} tiles at zoom ${z}…`
-  const water = new Water()
+  const water = new Features()
   let bytes = 0
   await Promise.all(Array.from({ length: count }, async (_, i) => {
     const [tz, tx, ty] = ids.slice(3 * i, 3 * i + 3)

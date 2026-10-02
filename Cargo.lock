@@ -821,6 +821,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
+name = "terramask"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "i_overlay",
+ "png",
+ "tiny-skia",
+ "ureq",
+]
+
+[[package]]
+name = "terramask-node"
+version = "0.1.0"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "terramask",
+]
+
+[[package]]
+name = "terramask-py"
+version = "0.1.0"
+dependencies = [
+ "pyo3",
+ "terramask",
+]
+
+[[package]]
+name = "terramask-wasm"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "terramask",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "tiny-skia"
 version = "0.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -957,44 +995,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "watermask"
-version = "0.3.0"
-dependencies = [
- "flate2",
- "i_overlay",
- "png",
- "tiny-skia",
- "ureq",
-]
-
-[[package]]
-name = "watermask-node"
-version = "0.3.0"
-dependencies = [
- "napi",
- "napi-build",
- "napi-derive",
- "watermask",
-]
-
-[[package]]
-name = "watermask-py"
-version = "0.3.0"
-dependencies = [
- "pyo3",
- "watermask",
-]
-
-[[package]]
-name = "watermask-wasm"
-version = "0.3.0"
-dependencies = [
- "js-sys",
- "wasm-bindgen",
- "watermask",
 ]
 
 [[package]]

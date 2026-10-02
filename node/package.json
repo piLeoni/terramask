@@ -1,7 +1,7 @@
 {
-  "name": "@pileoni/watermask",
-  "version": "0.3.0",
-  "description": "Water, land, forest or park masks, outlines and distance grids for any area, from OpenStreetMap vector tiles fetched on demand; depth and height bands from terrain tiles",
+  "name": "@pileoni/terramask",
+  "version": "0.1.0",
+  "description": "Masks, outlines, polygons and distance grids of water, land, forests, parks or any OpenStreetMap layer, for any area, from vector tiles fetched on demand; depth and height bands from terrain tiles",
   "main": "index.js",
   "types": "index.d.ts",
   "files": [
@@ -11,12 +11,12 @@
   "scripts": {
     "artifacts": "napi artifacts",
     "prepublishOnly": "napi pre-publish -t npm",
-    "build": "napi build --platform --release --manifest-path ../crates/watermask-node/Cargo.toml --package watermask-node --output-dir .",
-    "build:debug": "napi build --platform --manifest-path ../crates/watermask-node/Cargo.toml --package watermask-node --output-dir .",
+    "build": "napi build --platform --release --manifest-path ../crates/terramask-node/Cargo.toml --package terramask-node --output-dir .",
+    "build:debug": "napi build --platform --manifest-path ../crates/terramask-node/Cargo.toml --package terramask-node --output-dir .",
     "test": "node --test test.mjs"
   },
   "napi": {
-    "binaryName": "watermask",
+    "binaryName": "terramask",
     "targets": [
       "aarch64-apple-darwin",
       "x86_64-apple-darwin",
@@ -31,13 +31,17 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/piLeoni/watermask.git"
+    "url": "git+https://github.com/piLeoni/terramask.git"
   },
   "keywords": [
     "gis",
     "openstreetmap",
     "coastline",
     "water",
+    "land",
+    "forest",
+    "elevation",
+    "bathymetry",
     "vector-tiles",
     "raster"
   ],

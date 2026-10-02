@@ -97,7 +97,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: bindings-${{ matrix.target }}
-          path: node/watermask.*.node
+          path: node/terramask.*.node
           if-no-files-found: error
 
   wasm:
@@ -111,9 +111,9 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-pack
-      - run: wasm-pack build crates/watermask-wasm --release --target web --scope pileoni --out-dir pkg
-      - run: cp README.md LICENSE crates/watermask-wasm/pkg/
+      - run: wasm-pack build crates/terramask-wasm --release --target web --scope pileoni --out-dir pkg
+      - run: cp README.md LICENSE crates/terramask-wasm/pkg/
       - uses: actions/upload-artifact@v4
         with:
           name: wasm-pkg
-          path: crates/watermask-wasm/pkg
+          path: crates/terramask-wasm/pkg

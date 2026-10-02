@@ -1,25 +1,26 @@
-"""Water masks for any area, from OpenStreetMap vector tiles fetched on demand,
-and the same for land, forests, glaciers, parks or any layer of the tiles.
+"""Masks, outlines, polygons and distance grids of the world's water, land,
+forests, glaciers, parks or any layer of OpenStreetMap vector tiles, for any
+area, from tiles fetched on demand; depth and height bands from terrain tiles.
 
-    >>> import watermask
+    >>> import terramask
     >>> vineyard = (-70.85, 41.3, -70.45, 41.55)       # west, south, east, north
-    >>> water = watermask.fetch(vineyard, width=1200)  # OpenFreeMap, cached
+    >>> water = terramask.fetch(vineyard, width=1200)  # OpenFreeMap, cached
     >>> mask = water.mask(vineyard, 1200)
     >>> mask.coverage                                  # (h, w) float32, 1 = water
     >>> shore = mask.outlines()                        # [(n, 2) float32] in pixels
     >>> dist = mask.distance()                         # pixels to shore, + in water
     >>> water.geojson()                                # FeatureCollection in lon/lat
 
-Water is the sea, lakes, rivers, canals and docks of the OpenMapTiles schema;
-`select=` takes presets (`"land"`, `"forest"`, `"parks"`…, see `PRESETS`) and
+By default `fetch` gives the sea, lakes, rivers, canals and docks of the
+OpenMapTiles schema; `select=` takes presets (`"land"`, `"forest"`, `"parks"`…, see `PRESETS`) and
 `layer:class` rules instead. Depth and height bands come from terrain tiles,
 fetched only by `fetch_elevation`:
 
-    >>> sea = watermask.fetch(vineyard, width=1200, select="ocean")
-    >>> terrain = watermask.fetch_elevation(vineyard, width=1200)
+    >>> sea = terramask.fetch(vineyard, width=1200, select="ocean")
+    >>> terrain = terramask.fetch_elevation(vineyard, width=1200)
     >>> zones = sea.split(terrain, [-50, -20, -10])    # depths are negative
 
-The work is done in Rust (the `watermask._watermask` extension); this module
+The work is done in Rust (the `terramask._terramask` extension); this module
 adds numpy arrays.
 
 Map data © OpenMapTiles © OpenStreetMap contributors. Terrain: see
@@ -34,24 +35,24 @@ from typing import Callable, Iterable, NamedTuple, Union
 
 import numpy as np
 
-from . import _watermask
+from . import _terramask
 
 __all__ = ["DEFAULT_AREAS", "DEFAULT_LINES", "MAX_ZOOM", "OPENFREEMAP", "PRESETS", "TERRARIUM", "TERRARIUM_MAX_ZOOM",
-           "TERRARIUM_ZOOM", "AreaInfo", "Elevation", "Mask", "Water", "fetch", "fetch_elevation", "tiles_for",
+           "TERRARIUM_ZOOM", "AreaInfo", "Elevation", "Features", "Mask", "fetch", "fetch_elevation", "tiles_for",
            "zoom_for"]
-__version__ = _watermask.__version__
+__version__ = _terramask.__version__
 
 Bounds = tuple[float, float, float, float]  # west, south, east, north (degrees)
 Select = Union[str, Iterable[str]]  # presets and layer:class rules
 
-OPENFREEMAP: str = _watermask.OPENFREEMAP
-TERRARIUM: str = _watermask.TERRARIUM
-TERRARIUM_ZOOM: int = _watermask.TERRARIUM_ZOOM
-TERRARIUM_MAX_ZOOM: int = _watermask.TERRARIUM_MAX_ZOOM
-MAX_ZOOM: int = _watermask.MAX_ZOOM
-DEFAULT_AREAS: list[str] = list(_watermask.DEFAULT_AREAS)
-DEFAULT_LINES: list[str] = list(_watermask.DEFAULT_LINES)
-PRESETS: dict[str, str] = dict(_watermask.PRESETS)
+OPENFREEMAP: str = _terramask.OPENFREEMAP
+TERRARIUM: str = _terramask.TERRARIUM
+TERRARIUM_ZOOM: int = _terramask.TERRARIUM_ZOOM
+TERRARIUM_MAX_ZOOM: int = _terramask.TERRARIUM_MAX_ZOOM
+MAX_ZOOM: int = _terramask.MAX_ZOOM
+DEFAULT_AREAS: list[str] = list(_terramask.DEFAULT_AREAS)
+DEFAULT_LINES: list[str] = list(_terramask.DEFAULT_LINES)
+PRESETS: dict[str, str] = dict(_terramask.PRESETS)
 """Preset names and the rules they stand for."""
 
 
@@ -92,26 +93,27 @@ class Mask:
         return np.frombuffer(self._inner.distance(), dtype="<f4").reshape(self.height, self.width)
 
     @property
-    def water_fraction(self) -> float:
+    def fraction(self) -> float:
+        """Share of the grid that is covered."""
         return float(self.coverage.mean())
 
     def __repr__(self) -> str:
-        return f"<watermask.Mask {self.width}×{self.height}, {self.water_fraction:.1%} covered>"
+        return f"<terramask.Mask {self.width}×{self.height}, {self.fraction:.1%} covered>"
 
 
 class AreaInfo(NamedTuple):
     layer: str
     cls: str
     low: float | None
-    """Elevation band in metres, after `Water.split`; None at an open end or before."""
+    """Elevation band in metres, after `Features.split`; None at an open end or before."""
     high: float | None
 
 
-class Water:
+class Features:
     """Areas and lines collected from vector tiles, cut to each tile."""
 
     def __init__(self, inner=None):
-        self._inner = inner if inner is not None else _watermask.Water()
+        self._inner = inner if inner is not None else _terramask.Features()
 
     def add_tile(self, z: int, x: int, y: int, data: bytes, *, select: Select | None = None,
                  areas: list[str] | None = None, lines: list[str] | None = None, intermittent: bool = False,
@@ -130,20 +132,20 @@ class Water:
         pts, ends, classes = self._inner.lines(tuple(bounds), width, height)
         return list(zip(classes, _unpack(pts, ends)))
 
-    def subset(self, select: Select) -> Water:
+    def subset(self, select: Select) -> Features:
         """The areas and lines matching presets or `layer:class` rules."""
-        return Water(self._inner.subset(_select(select)))
+        return Features(self._inner.subset(_select(select)))
 
-    def split(self, elevation: Elevation, levels: Iterable[float]) -> Water:
+    def split(self, elevation: Elevation, levels: Iterable[float]) -> Features:
         """Every area cut into elevation bands at `levels` (metres, depths
         negative): below the lowest, between each pair, above the highest.
         Edges stay those of the areas; the terrain decides where bands meet.
         Areas beyond the elevation tiles are left out."""
-        return Water(self._inner.split(elevation._inner, [float(v) for v in levels]))
+        return Features(self._inner.split(elevation._inner, [float(v) for v in levels]))
 
-    def within(self, low: float = -np.inf, high: float = np.inf) -> Water:
+    def within(self, low: float = -np.inf, high: float = np.inf) -> Features:
         """The bands of a split that lie within `low`..`high` metres."""
-        return Water(self._inner.within(float(low), float(high)))
+        return Features(self._inner.within(float(low), float(high)))
 
     @property
     def areas(self) -> list[AreaInfo]:
@@ -167,14 +169,14 @@ class Water:
         return self._inner.line_count
 
     def __repr__(self) -> str:
-        return f"<watermask.Water {self.area_count} areas, {self.line_count} lines>"
+        return f"<terramask.Features {self.area_count} areas, {self.line_count} lines>"
 
 
 class Elevation:
     """Terrain heights in metres (sea floor negative) from elevation tiles."""
 
     def __init__(self, inner=None):
-        self._inner = inner if inner is not None else _watermask.Elevation()
+        self._inner = inner if inner is not None else _terramask.Elevation()
 
     def add_tile(self, z: int, x: int, y: int, data: bytes) -> None:
         """Read one Terrarium PNG from anywhere. Tiles must share one zoom."""
@@ -193,25 +195,25 @@ class Elevation:
         return self._inner.tile_count
 
     def __repr__(self) -> str:
-        return f"<watermask.Elevation {self.tile_count} tiles>"
+        return f"<terramask.Elevation {self.tile_count} tiles>"
 
 
 def fetch(bounds: Bounds, width: int | None = None, height: int | None = None, *, zoom: int | None = None,
           select: Select | None = None, areas: list[str] | None = None, lines: list[str] | None = None,
           intermittent: bool = False, tunnels: bool = False, source: str | None = None,
           cache: str | Path | None = None, no_cache: bool = False, max_tiles: int = 256,
-          log: Callable[[int, int], None] | None = None) -> Water:
+          log: Callable[[int, int], None] | None = None) -> Features:
     """Download (or read from the cache) the water in `bounds`, or what
     `select` names: presets (see `PRESETS`) and `layer:class` rules.
 
     `width` is the output width in pixels: it picks the tile zoom with at least
     that detail. Or give `zoom` directly. `source` is a TileJSON URL or a
     `{z}/{x}/{y}` template (default OpenFreeMap); `cache` defaults to
-    `$WATERMASK_CACHE` or the platform's cache folder. `log(done, total)` reports tiles.
+    `$TERRAMASK_CACHE` or the platform's cache folder. `log(done, total)` reports tiles.
     """
-    inner = _watermask.fetch(tuple(bounds), width, height, zoom, _select(select), areas, lines, intermittent,
+    inner = _terramask.fetch(tuple(bounds), width, height, zoom, _select(select), areas, lines, intermittent,
                              tunnels, source, None if cache is None else str(cache), no_cache, max_tiles, log)
-    return Water(inner)
+    return Features(inner)
 
 
 def fetch_elevation(bounds: Bounds, width: int | None = None, height: int | None = None, *,
@@ -226,16 +228,16 @@ def fetch_elevation(bounds: Bounds, width: int | None = None, height: int | None
     `TERRARIUM_ZOOM` (10): deeper, some coasts flatten the sea to 0 m, and
     the sea floor has no more detail anyway. For detailed land heights pass
     up to `TERRARIUM_MAX_ZOOM` (15)."""
-    inner = _watermask.fetch_elevation(tuple(bounds), width, height, zoom, max_zoom, source,
+    inner = _terramask.fetch_elevation(tuple(bounds), width, height, zoom, max_zoom, source,
                                        None if cache is None else str(cache), no_cache, max_tiles, log)
     return Elevation(inner)
 
 
 def zoom_for(bounds: Bounds, width: int, max_tiles: int = 256, max_zoom: int = MAX_ZOOM) -> int:
     """Tile zoom with at least the detail of `width` pixels across `bounds`."""
-    return _watermask.zoom_for(tuple(bounds), width, max_tiles, max_zoom)
+    return _terramask.zoom_for(tuple(bounds), width, max_tiles, max_zoom)
 
 
 def tiles_for(bounds: Bounds, zoom: int) -> list[tuple[int, int, int]]:
     """(z, x, y) of the tiles covering `bounds`; x may exceed 2**z - 1 across 180°."""
-    return _watermask.tiles_for(tuple(bounds), zoom)
+    return _terramask.tiles_for(tuple(bounds), zoom)

@@ -5,9 +5,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import watermask
+import terramask
 
-FIXTURES = Path(__file__).parents[2] / "crates" / "watermask" / "tests" / "fixtures"
+FIXTURES = Path(__file__).parents[2] / "crates" / "terramask" / "tests" / "fixtures"
 
 
 def tile_bounds(z, x, y):
@@ -21,7 +21,7 @@ def tile_bounds(z, x, y):
 
 
 def load(*tiles, **filter):
-    w = watermask.Water()
+    w = terramask.Features()
     for z, x, y in tiles:
         w.add_tile(z, x, y, (FIXTURES / f"{z}-{x}-{y}.pbf").read_bytes(), **filter)
     return w
@@ -31,7 +31,7 @@ def test_open_sea_is_water():
     m = load((12, 1244, 1531)).mask(tile_bounds(12, 1244, 1531), 256, 256)
     assert m.coverage.shape == (256, 256)
     assert m.coverage.dtype == np.float32
-    assert m.water_fraction > 0.999
+    assert m.fraction > 0.999
 
 
 def test_outlines_and_distance():
@@ -46,11 +46,11 @@ def test_outlines_and_distance():
 
 def test_filter_and_lines():
     b = tile_bounds(12, 1244, 1529)
-    all_water = load((12, 1244, 1529)).mask(b, 256, 256).water_fraction
-    sea = load((12, 1244, 1529), areas=["ocean"]).mask(b, 256, 256).water_fraction
+    all_water = load((12, 1244, 1529)).mask(b, 256, 256).fraction
+    sea = load((12, 1244, 1529), areas=["ocean"]).mask(b, 256, 256).fraction
     assert sea < all_water
     w = load((12, 1244, 1529))
-    assert all(cls in watermask.DEFAULT_LINES for cls, _ in w.lines(b, 256, 256))
+    assert all(cls in terramask.DEFAULT_LINES for cls, _ in w.lines(b, 256, 256))
 
 
 def test_geojson():
@@ -89,15 +89,15 @@ def test_height_follows_the_box():
 
 def test_tiles_and_zoom():
     b = (-70.85, 41.3, -70.45, 41.55)
-    assert watermask.zoom_for(b, 1200) == 13
-    assert watermask.tiles_for((4.9, 52.37, 4.9001, 52.3701), 12) == [(12, 2103, 1346)]
+    assert terramask.zoom_for(b, 1200) == 13
+    assert terramask.tiles_for((4.9, 52.37, 4.9001, 52.3701), 12) == [(12, 2103, 1346)]
 
 
 def test_bad_arguments():
     with pytest.raises(ValueError):
-        watermask.fetch((0, 0, 1, 1))
+        terramask.fetch((0, 0, 1, 1))
     with pytest.raises(RuntimeError):
-        watermask.Water().add_tile(12, 1, 1, b"\x1a\xff\xff\xff")
+        terramask.Features().add_tile(12, 1, 1, b"\x1a\xff\xff\xff")
     with pytest.raises(ValueError, match="forest"):
         load((12, 1244, 1529), select="forrest")
     with pytest.raises(ValueError, match="not both"):
@@ -106,7 +106,7 @@ def test_bad_arguments():
 
 def test_presets_and_land():
     b = tile_bounds(12, 1244, 1529)
-    assert {"water", "land", "forest", "glacier", "parks"} <= watermask.PRESETS.keys()
+    assert {"water", "land", "forest", "glacier", "parks"} <= terramask.PRESETS.keys()
     w = load((12, 1244, 1529), select=["forest", "parks", "land"])
     layers = {a.layer for a in w.areas}
     assert {"landcover", "land"} <= layers <= {"landcover", "park", "land"}
@@ -120,7 +120,7 @@ def test_presets_and_land():
 
 
 def elevation(*tiles):
-    e = watermask.Elevation()
+    e = terramask.Elevation()
     for z, x, y in tiles:
         e.add_tile(z, x, y, (FIXTURES / f"dem-{z}-{x}-{y}.png").read_bytes())
     return e
@@ -145,4 +145,4 @@ def test_elevation_and_depth_bands():
     feats = zones.geojson()["features"]
     assert any(f["properties"].get("max") == -20 and f["properties"]["min"] is None for f in feats)
     with pytest.raises(ValueError):
-        sea.split(watermask.Elevation(), [0])
+        sea.split(terramask.Elevation(), [0])

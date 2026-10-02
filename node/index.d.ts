@@ -23,35 +23,20 @@ export declare class Elevation {
   get tileCount(): number
 }
 
-/** Water coverage of a grid. */
-export declare class Mask {
-  get width(): number
-  get height(): number
-  /** Fraction of each pixel that is water, row 0 at the top. */
-  coverage(): Float32Array
-  /**
-   * Shoreline polylines in pixels, water on the left: interleaved x,y and
-   * end offsets (in points).
-   */
-  outlines(): [Float32Array, Uint32Array]
-  /** Pixels to the shore: positive in water, negative on land. */
-  distance(): Float32Array
-}
-
-/** Water gathered from vector tiles. */
-export declare class Water {
+/** Areas and lines gathered from vector tiles. */
+export declare class Features {
   constructor()
   /** Read one vector tile (raw or gzipped protobuf). */
   addTile(z: number, x: number, y: number, data: Uint8Array, filterOptions?: FilterOptions | undefined | null): void
   /** The areas and lines matching presets or `layer:class` rules. */
-  subset(select: Array<string>): Water
+  subset(select: Array<string>): Features
   /**
    * Every area cut into elevation bands at `levels` (metres, depths
    * negative): below the lowest, between each pair, above the highest.
    */
-  split(elevation: Elevation, levels: Array<number>): Water
+  split(elevation: Elevation, levels: Array<number>): Features
   /** The bands of a split that lie within `low`..`high` metres. */
-  within(low?: number | undefined | null, high?: number | undefined | null): Water
+  within(low?: number | undefined | null, high?: number | undefined | null): Features
   areas(): Array<AreaInfo>
   /**
    * Coverage on a north-up Web Mercator grid; height follows the box's
@@ -68,6 +53,21 @@ export declare class Water {
   geojson(options?: GeoJsonOptions | undefined | null): string
   get areaCount(): number
   get lineCount(): number
+}
+
+/** Coverage of a grid. */
+export declare class Mask {
+  get width(): number
+  get height(): number
+  /** Fraction of each pixel covered, row 0 at the top. */
+  coverage(): Float32Array
+  /**
+   * Shoreline polylines in pixels, water on the left: interleaved x,y and
+   * end offsets (in points).
+   */
+  outlines(): [Float32Array, Uint32Array]
+  /** Pixels to the edge: positive inside, negative outside. */
+  distance(): Float32Array
 }
 
 /** Layer, class and elevation band of an area. */
@@ -102,7 +102,7 @@ export interface ElevationOptions {
  * Download (or read from the cache) the water in a box, or what `select`
  * names. Blocks until done.
  */
-export declare function fetch(bounds: Array<number>, options?: FetchOptions | undefined | null): Water
+export declare function fetch(bounds: Array<number>, options?: FetchOptions | undefined | null): Features
 
 /** Download (or read from the cache) terrain for a box. Blocks until done. */
 export declare function fetchElevation(bounds: Array<number>, options?: ElevationOptions | undefined | null): Elevation
@@ -121,7 +121,7 @@ export interface FetchOptions {
   tunnels?: boolean
   /** TileJSON URL or {z}/{x}/{y} template; default OpenFreeMap. */
   source?: string
-  /** Cache directory; default $WATERMASK_CACHE or the platform's cache folder. */
+  /** Cache directory; default $TERRAMASK_CACHE or the platform's cache folder. */
   cache?: string
   noCache?: boolean
   maxTiles?: number

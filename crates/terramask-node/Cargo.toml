@@ -1,5 +1,5 @@
 [package]
-name = "watermask-node"
+name = "terramask-node"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-watermask = { path = "../watermask" }
+terramask = { path = "../terramask" }
 napi = { version = "3", default-features = false, features = ["napi4"] }
 napi-derive = "3"
 

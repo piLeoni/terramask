@@ -1,5 +1,5 @@
-//! Python bindings: the `watermask._watermask` extension module. The public
-//! API lives in `python/watermask/__init__.py`; arrays cross as little-endian
+//! Python bindings: the `terramask._terramask` extension module. The public
+//! API lives in `python/terramask/__init__.py`; arrays cross as little-endian
 //! bytes so one abi3 wheel serves every Python version without numpy at build
 //! time.
 
@@ -10,11 +10,11 @@ use std::path::PathBuf;
 
 type Bounds = (f64, f64, f64, f64);
 
-fn py_err(e: watermask::Error) -> PyErr {
+fn py_err(e: terramask::Error) -> PyErr {
     match e {
-        watermask::Error::Input(m) => PyValueError::new_err(m),
-        watermask::Error::Net(m) => PyConnectionError::new_err(m),
-        watermask::Error::Data(m) => PyRuntimeError::new_err(m),
+        terramask::Error::Input(m) => PyValueError::new_err(m),
+        terramask::Error::Net(m) => PyConnectionError::new_err(m),
+        terramask::Error::Data(m) => PyRuntimeError::new_err(m),
     }
 }
 
@@ -22,13 +22,13 @@ fn arr(b: Bounds) -> [f64; 4] {
     [b.0, b.1, b.2, b.3]
 }
 
-fn grid(bounds: Bounds, width: usize, height: Option<usize>) -> PyResult<watermask::Grid> {
+fn grid(bounds: Bounds, width: usize, height: Option<usize>) -> PyResult<terramask::Grid> {
     if width == 0 || height == Some(0) {
         return Err(PyValueError::new_err("width and height must be positive"));
     }
     Ok(match height {
-        Some(h) => watermask::Grid::new(arr(bounds), width, h),
-        None => watermask::Grid::with_width(arr(bounds), width),
+        Some(h) => terramask::Grid::new(arr(bounds), width, h),
+        None => terramask::Grid::with_width(arr(bounds), width),
     })
 }
 
@@ -39,20 +39,20 @@ fn filter(
     lines: Option<Vec<String>>,
     intermittent: bool,
     tunnels: bool,
-) -> PyResult<watermask::Filter> {
+) -> PyResult<terramask::Filter> {
     let f = match select {
-        Some(s) if areas.is_none() && lines.is_none() => watermask::Filter::parse(&s).map_err(py_err)?,
+        Some(s) if areas.is_none() && lines.is_none() => terramask::Filter::parse(&s).map_err(py_err)?,
         Some(_) => return Err(PyValueError::new_err("give select, or areas and lines, not both")),
-        None => watermask::Filter::water(
-            &areas.unwrap_or_else(|| watermask::Filter::DEFAULT_AREAS.iter().map(|s| s.to_string()).collect()),
-            &lines.unwrap_or_else(|| watermask::Filter::DEFAULT_LINES.iter().map(|s| s.to_string()).collect()),
+        None => terramask::Filter::water(
+            &areas.unwrap_or_else(|| terramask::Filter::DEFAULT_AREAS.iter().map(|s| s.to_string()).collect()),
+            &lines.unwrap_or_else(|| terramask::Filter::DEFAULT_LINES.iter().map(|s| s.to_string()).collect()),
         ),
     };
-    Ok(watermask::Filter { intermittent, tunnels, ..f })
+    Ok(terramask::Filter { intermittent, tunnels, ..f })
 }
 
-fn fetcher(source: Option<String>, cache: Option<PathBuf>, no_cache: bool) -> watermask::Fetcher {
-    let mut f = watermask::Fetcher::new();
+fn fetcher(source: Option<String>, cache: Option<PathBuf>, no_cache: bool) -> terramask::Fetcher {
+    let mut f = terramask::Fetcher::new();
     if let Some(c) = cache {
         f.cache = Some(c);
     }
@@ -95,10 +95,10 @@ fn pack<'py>(py: Python<'py>, lines: &[Vec<[f32; 2]>]) -> (Bound<'py, PyBytes>, 
     (PyBytes::new(py, &pts), PyBytes::new(py, &ends))
 }
 
-/// Water coverage of a grid.
-#[pyclass(frozen, module = "watermask._watermask")]
+/// Coverage of a grid.
+#[pyclass(frozen, module = "terramask._terramask")]
 struct Mask {
-    inner: watermask::Mask,
+    inner: terramask::Mask,
 }
 
 #[pymethods]
@@ -124,15 +124,15 @@ impl Mask {
     }
 }
 
-/// Water gathered from vector tiles.
-#[pyclass(module = "watermask._watermask")]
+/// Areas and lines gathered from vector tiles.
+#[pyclass(module = "terramask._terramask")]
 #[derive(Default)]
-struct Water {
-    inner: watermask::Water,
+struct Features {
+    inner: terramask::Features,
 }
 
 #[pymethods]
-impl Water {
+impl Features {
     #[new]
     fn new() -> Self {
         Self::default()
@@ -153,27 +153,27 @@ impl Water {
         tunnels: bool,
     ) -> PyResult<()> {
         let f = filter(select, areas, lines, intermittent, tunnels)?;
-        self.inner.add_tile(watermask::TileId::new(z, x, y), data, &f).map_err(py_err)
+        self.inner.add_tile(terramask::TileId::new(z, x, y), data, &f).map_err(py_err)
     }
 
-    fn subset(&self, select: Vec<String>) -> PyResult<Water> {
-        let f = watermask::Filter::parse(&select).map_err(py_err)?;
-        Ok(Water { inner: self.inner.subset(&f) })
+    fn subset(&self, select: Vec<String>) -> PyResult<Features> {
+        let f = terramask::Filter::parse(&select).map_err(py_err)?;
+        Ok(Features { inner: self.inner.subset(&f) })
     }
 
-    fn within(&self, low: f64, high: f64) -> Water {
-        Water { inner: self.inner.within(low, high) }
+    fn within(&self, low: f64, high: f64) -> Features {
+        Features { inner: self.inner.within(low, high) }
     }
 
-    fn split(&self, py: Python<'_>, elevation: &Elevation, levels: Vec<f64>) -> PyResult<Water> {
+    fn split(&self, py: Python<'_>, elevation: &Elevation, levels: Vec<f64>) -> PyResult<Features> {
         let inner = py.detach(|| self.inner.split(&elevation.inner, &levels)).map_err(py_err)?;
-        Ok(Water { inner })
+        Ok(Features { inner })
     }
 
     /// (layer, class, low, high) of each area; low and high are None until
     /// split, and at the open ends of the bands.
     fn area_info(&self) -> Vec<(String, String, Option<f64>, Option<f64>)> {
-        let end = |a: &watermask::Area, i: usize| a.elevation.map(|e| e[i]).filter(|v| v.is_finite());
+        let end = |a: &terramask::Area, i: usize| a.elevation.map(|e| e[i]).filter(|v| v.is_finite());
         self.inner.areas.iter().map(|a| (a.layer.clone(), a.class.clone(), end(a, 0), end(a, 1))).collect()
     }
 
@@ -188,7 +188,7 @@ impl Water {
         line_width: f64,
     ) -> PyResult<Mask> {
         let g = grid(bounds, width, height)?;
-        let opts = watermask::MaskOptions { supersample, line_width };
+        let opts = terramask::MaskOptions { supersample, line_width };
         Ok(Mask { inner: py.detach(|| self.inner.mask(&g, &opts)) })
     }
 
@@ -208,7 +208,7 @@ impl Water {
 
     #[pyo3(signature = (pieces=false, bounds=None))]
     fn geojson(&self, py: Python<'_>, pieces: bool, bounds: Option<Bounds>) -> String {
-        let opts = watermask::GeoJsonOptions { pieces, bounds: bounds.map(arr) };
+        let opts = terramask::GeoJsonOptions { pieces, bounds: bounds.map(arr) };
         py.detach(|| self.inner.to_geojson(&opts))
     }
 
@@ -224,10 +224,10 @@ impl Water {
 }
 
 /// Terrain heights from elevation tiles.
-#[pyclass(module = "watermask._watermask")]
+#[pyclass(module = "terramask._terramask")]
 #[derive(Default)]
 struct Elevation {
-    inner: watermask::Elevation,
+    inner: terramask::Elevation,
 }
 
 #[pymethods]
@@ -239,7 +239,7 @@ impl Elevation {
 
     /// A Terrarium PNG.
     fn add_tile(&mut self, z: u8, x: u32, y: u32, data: &[u8]) -> PyResult<()> {
-        self.inner.add_tile(watermask::TileId::new(z, x, y), data).map_err(py_err)
+        self.inner.add_tile(terramask::TileId::new(z, x, y), data).map_err(py_err)
     }
 
     #[pyo3(signature = (bounds, width, height=None))]
@@ -288,7 +288,7 @@ fn fetch_elevation(
         (Some(z), _) => py.detach(|| f.elevation(arr(bounds), z, progress)),
         (None, Some(w)) => {
             let g = grid(bounds, w, height)?;
-            let limits = watermask::ZoomLimits { max_tiles, ..Default::default() };
+            let limits = terramask::ZoomLimits { max_tiles, ..Default::default() };
             py.detach(|| f.elevation_for(&g, &limits, progress))
         }
         (None, None) => return Err(PyValueError::new_err("give the output width (or a tile zoom)")),
@@ -298,15 +298,15 @@ fn fetch_elevation(
 }
 
 #[pyfunction]
-#[pyo3(signature = (bounds, width, max_tiles=256, max_zoom=watermask::MAX_ZOOM))]
+#[pyo3(signature = (bounds, width, max_tiles=256, max_zoom=terramask::MAX_ZOOM))]
 fn zoom_for(bounds: Bounds, width: usize, max_tiles: usize, max_zoom: u8) -> u8 {
-    watermask::zoom_for(&arr(bounds), width, &watermask::ZoomLimits { max_zoom, max_tiles })
+    terramask::zoom_for(&arr(bounds), width, &terramask::ZoomLimits { max_zoom, max_tiles })
 }
 
 /// (z, x, y) of the tiles covering the box; x may exceed 2**z - 1 across 180°.
 #[pyfunction]
 fn tiles_for(bounds: Bounds, zoom: u8) -> Vec<(u8, u32, u32)> {
-    watermask::tiles_for(&arr(bounds), zoom).into_iter().map(|t| (t.z, t.x, t.y)).collect()
+    terramask::tiles_for(&arr(bounds), zoom).into_iter().map(|t| (t.z, t.x, t.y)).collect()
 }
 
 #[pyfunction]
@@ -329,7 +329,7 @@ fn fetch(
     no_cache: bool,
     max_tiles: usize,
     log: Option<Py<PyAny>>,
-) -> PyResult<Water> {
+) -> PyResult<Features> {
     let fetcher = fetcher(source, cache, no_cache);
     let f = filter(select, areas, lines, intermittent, tunnels)?;
     let progress = progress(&log);
@@ -337,27 +337,27 @@ fn fetch(
         (Some(z), _) => py.detach(|| fetcher.water(arr(bounds), z, &f, progress)),
         (None, Some(w)) => {
             let g = grid(bounds, w, height)?;
-            let limits = watermask::ZoomLimits { max_tiles, ..Default::default() };
-            py.detach(|| fetcher.water_for(&g, &f, &limits, progress))
+            let limits = terramask::ZoomLimits { max_tiles, ..Default::default() };
+            py.detach(|| fetcher.features_for(&g, &f, &limits, progress))
         }
         (None, None) => return Err(PyValueError::new_err("give the output width (or a tile zoom)")),
     }
     .map_err(py_err)?;
-    Ok(Water { inner })
+    Ok(Features { inner })
 }
 
 #[pymodule]
-fn _watermask(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _terramask(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    m.add("OPENFREEMAP", watermask::OPENFREEMAP)?;
-    m.add("MAX_ZOOM", watermask::MAX_ZOOM)?;
-    m.add("TERRARIUM", watermask::TERRARIUM)?;
-    m.add("TERRARIUM_ZOOM", watermask::TERRARIUM_ZOOM)?;
-    m.add("TERRARIUM_MAX_ZOOM", watermask::TERRARIUM_MAX_ZOOM)?;
-    m.add("DEFAULT_AREAS", watermask::Filter::DEFAULT_AREAS.to_vec())?;
-    m.add("DEFAULT_LINES", watermask::Filter::DEFAULT_LINES.to_vec())?;
-    m.add("PRESETS", watermask::PRESETS.to_vec())?;
-    m.add_class::<Water>()?;
+    m.add("OPENFREEMAP", terramask::OPENFREEMAP)?;
+    m.add("MAX_ZOOM", terramask::MAX_ZOOM)?;
+    m.add("TERRARIUM", terramask::TERRARIUM)?;
+    m.add("TERRARIUM_ZOOM", terramask::TERRARIUM_ZOOM)?;
+    m.add("TERRARIUM_MAX_ZOOM", terramask::TERRARIUM_MAX_ZOOM)?;
+    m.add("DEFAULT_AREAS", terramask::Filter::DEFAULT_AREAS.to_vec())?;
+    m.add("DEFAULT_LINES", terramask::Filter::DEFAULT_LINES.to_vec())?;
+    m.add("PRESETS", terramask::PRESETS.to_vec())?;
+    m.add_class::<Features>()?;
     m.add_class::<Mask>()?;
     m.add_class::<Elevation>()?;
     m.add_function(wrap_pyfunction!(zoom_for, m)?)?;

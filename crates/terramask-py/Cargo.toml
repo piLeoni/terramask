@@ -1,6 +1,6 @@
 [package]
-name = "watermask-py"
-description = "Python bindings for watermask"
+name = "terramask-py"
+description = "Python bindings for terramask"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,9 +8,9 @@ repository.workspace = true
 publish = false
 
 [lib]
-name = "_watermask"
+name = "_terramask"
 crate-type = ["cdylib"]
 
 [dependencies]
-watermask = { path = "../watermask" }
+terramask = { path = "../terramask" }
 pyo3 = { version = "0.29", features = ["extension-module", "abi3-py310"] }

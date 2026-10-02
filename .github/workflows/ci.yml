@@ -22,7 +22,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test
-      - run: cargo build -p watermask --no-default-features --target wasm32-unknown-unknown
+      - run: cargo build -p terramask --no-default-features --target wasm32-unknown-unknown
 
   python:
     runs-on: ubuntu-latest

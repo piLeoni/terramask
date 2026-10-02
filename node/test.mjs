@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 
 const wm = createRequire(import.meta.url)('./index.js')
-const fixture = (z, x, y) => readFileSync(new URL(`../crates/watermask/tests/fixtures/${z}-${x}-${y}.pbf`, import.meta.url))
+const fixture = (z, x, y) => readFileSync(new URL(`../crates/terramask/tests/fixtures/${z}-${x}-${y}.pbf`, import.meta.url))
 
 function tileBounds(z, x, y) {
   const n = 2 ** z
@@ -14,7 +14,7 @@ function tileBounds(z, x, y) {
 }
 
 test('open sea is water', () => {
-  const w = new wm.Water()
+  const w = new wm.Features()
   w.addTile(12, 1244, 1531, fixture(12, 1244, 1531))
   const m = w.mask(tileBounds(12, 1244, 1531), 256, 256)
   const c = m.coverage()
@@ -23,7 +23,7 @@ test('open sea is water', () => {
 })
 
 test('shoreline, distance and lines on a coastal tile', () => {
-  const w = new wm.Water()
+  const w = new wm.Features()
   w.addTile(12, 1244, 1529, fixture(12, 1244, 1529))
   const b = tileBounds(12, 1244, 1529)
   const m = w.mask(b, 256, 256)
@@ -38,7 +38,7 @@ test('shoreline, distance and lines on a coastal tile', () => {
 })
 
 test('geojson joins pieces and cuts to bounds', () => {
-  const w = new wm.Water()
+  const w = new wm.Features()
   w.addTile(12, 1243, 1528, fixture(12, 1243, 1528))
   w.addTile(12, 1244, 1528, fixture(12, 1244, 1528))
   const areas = JSON.parse(w.geojson()).features.filter((f) => f.geometry.type === 'MultiPolygon')
@@ -55,22 +55,22 @@ test('geojson joins pieces and cuts to bounds', () => {
 test('filter options', () => {
   const b = tileBounds(12, 1244, 1529)
   const frac = (w) => w.mask(b, 256, 256).coverage().reduce((a, v) => a + v, 0)
-  const all = new wm.Water()
+  const all = new wm.Features()
   all.addTile(12, 1244, 1529, fixture(12, 1244, 1529))
-  const sea = new wm.Water()
+  const sea = new wm.Features()
   sea.addTile(12, 1244, 1529, fixture(12, 1244, 1529), { areas: ['ocean'] })
   assert.ok(frac(sea) < frac(all))
 })
 
 test('presets, land and subsets', () => {
   const b = tileBounds(12, 1244, 1529)
-  const w = new wm.Water()
+  const w = new wm.Features()
   w.addTile(12, 1244, 1529, fixture(12, 1244, 1529), { select: ['forest', 'land'] })
   const layers = new Set(w.areas().map((a) => a.layer))
   assert.deepEqual([...layers].sort(), ['land', 'landcover'])
   const woods = w.subset(['forest'])
   assert.ok(woods.areaCount > 0 && woods.areas().every((a) => a.class === 'wood'))
-  const sea = new wm.Water()
+  const sea = new wm.Features()
   sea.addTile(12, 1244, 1529, fixture(12, 1244, 1529), { select: ['ocean'] })
   const s = sea.mask(b, 128, 128).coverage()
   const l = w.subset(['land']).mask(b, 128, 128).coverage()
@@ -83,11 +83,11 @@ test('presets, land and subsets', () => {
 test('elevation and depth bands', () => {
   const b = tileBounds(12, 1244, 1531)
   const e = new wm.Elevation()
-  e.addTile(12, 1244, 1531, readFileSync(new URL('../crates/watermask/tests/fixtures/dem-12-1244-1531.png', import.meta.url)))
+  e.addTile(12, 1244, 1531, readFileSync(new URL('../crates/terramask/tests/fixtures/dem-12-1244-1531.png', import.meta.url)))
   const h = e.grid(b, 64, 64)
   assert.equal(h.length, 64 * 64)
   assert.ok(h.every((v) => v < 5) && Math.min(...h) < -20)
-  const sea = new wm.Water()
+  const sea = new wm.Features()
   sea.addTile(12, 1244, 1531, fixture(12, 1244, 1531), { select: ['ocean'] })
   const zones = sea.split(e, [-20, -10])
   const bands = zones.areas().map((a) => [a.low ?? null, a.high ?? null])
@@ -107,6 +107,6 @@ test('tiles and zoom', () => {
 
 test('bad input throws', () => {
   assert.throws(() => wm.fetch([0, 0, 1, 1]), /width/)
-  assert.throws(() => new wm.Water().mask([0, 0, 1], 10), /bounds/)
-  assert.throws(() => new wm.Water().addTile(12, 1, 1, Buffer.from([0x1a, 0xff, 0xff, 0xff])))
+  assert.throws(() => new wm.Features().mask([0, 0, 1], 10), /bounds/)
+  assert.throws(() => new wm.Features().addTile(12, 1, 1, Buffer.from([0x1a, 0xff, 0xff, 0xff])))
 })

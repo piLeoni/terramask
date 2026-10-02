@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::io::Write;
 
-use watermask::{merc_to_lonlat, Filter, GeoJsonOptions, Grid, MaskOptions, TileId, Water};
+use terramask::{merc_to_lonlat, Features, Filter, GeoJsonOptions, Grid, MaskOptions, TileId};
 
 // Vineyard Sound: open water crossing the edge between two tiles.
 const WEST: &[u8] = include_bytes!("fixtures/12-1243-1528.pbf");
@@ -12,8 +12,8 @@ const EAST: &[u8] = include_bytes!("fixtures/12-1244-1528.pbf");
 const ISLAND: &[u8] = include_bytes!("fixtures/12-1244-1529.pbf");
 const OPEN_SEA: &[u8] = include_bytes!("fixtures/12-1244-1531.pbf");
 
-fn water(tiles: &[(u32, u32, &[u8])]) -> Water {
-    let mut w = Water::new();
+fn water(tiles: &[(u32, u32, &[u8])]) -> Features {
+    let mut w = Features::new();
     for &(x, y, b) in tiles {
         w.add_tile(TileId::new(12, x, y), b, &Filter::default()).unwrap();
     }
@@ -31,7 +31,7 @@ fn grid_over(x0: u32, x1: u32, y: u32) -> Grid {
 #[test]
 fn open_sea_is_all_water() {
     let m = water(&[(1244, 1531, OPEN_SEA)]).mask(&grid_over(1244, 1244, 1531), &MaskOptions::default());
-    assert!(m.water_fraction() > 0.999, "{}", m.water_fraction());
+    assert!(m.fraction() > 0.999, "{}", m.fraction());
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn reads_classes_from_a_coastal_tile() {
     assert!(classes.contains("ocean") && classes.contains("lake"), "{classes:?}");
     assert!(!classes.contains("swimming_pool") && !classes.contains("pond"));
     let m = w.mask(&grid_over(1244, 1244, 1528), &MaskOptions::default());
-    let f = m.water_fraction();
+    let f = m.fraction();
     assert!(f > 0.2 && f < 0.95, "coastal tile should be part water, got {f}");
 }
 
@@ -76,11 +76,11 @@ fn gzipped_tiles_read_the_same() {
 #[test]
 fn filter_decides_what_is_water() {
     let g = grid_over(1244, 1244, 1529);
-    let all = water(&[(1244, 1529, ISLAND)]).mask(&g, &MaskOptions::default()).water_fraction();
-    let mut sea_only = Water::new();
+    let all = water(&[(1244, 1529, ISLAND)]).mask(&g, &MaskOptions::default()).fraction();
+    let mut sea_only = Features::new();
     let f = Filter::water(&["ocean"], Filter::DEFAULT_LINES);
     sea_only.add_tile(TileId::new(12, 1244, 1529), ISLAND, &f).unwrap();
-    let sea = sea_only.mask(&g, &MaskOptions::default()).water_fraction();
+    let sea = sea_only.mask(&g, &MaskOptions::default()).fraction();
     assert!(sea < all, "lakes add water: {sea} vs {all}");
 }
 
@@ -97,7 +97,7 @@ fn geojson_holds_every_feature() {
     assert_eq!(merged.matches("\"type\":\"Feature\"").count(), classes.len() + w.lines.len());
 }
 
-fn diff(a: &watermask::Mask, b: &watermask::Mask) -> f32 {
+fn diff(a: &terramask::Mask, b: &terramask::Mask) -> f32 {
     a.coverage.iter().zip(&b.coverage).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.coverage.len() as f32
 }
 
@@ -132,7 +132,7 @@ fn bounds_cut_areas_and_lines() {
         assert!(cut.lines.iter().flat_map(|l| &l.points).all(|p| inside(&p)));
         // Same water on the kept half, none on the other.
         let (a, b) = (w.mask(&g, &MaskOptions::default()), cut.mask(&g, &MaskOptions::default()));
-        let cols = |m: &watermask::Mask, xs: std::ops::Range<usize>| -> f32 {
+        let cols = |m: &terramask::Mask, xs: std::ops::Range<usize>| -> f32 {
             (0..m.height).map(|y| xs.clone().map(|x| m.coverage[y * m.width + x]).sum::<f32>()).sum()
         };
         assert!((cols(&a, 0..127) - cols(&b, 0..127)).abs() < 1.0);
@@ -140,9 +140,9 @@ fn bounds_cut_areas_and_lines() {
     }
 }
 
-fn select(tiles: &[(u32, u32, &[u8])], items: &[&str]) -> Water {
+fn select(tiles: &[(u32, u32, &[u8])], items: &[&str]) -> Features {
     let f = Filter::parse(items).unwrap();
-    let mut w = Water::new();
+    let mut w = Features::new();
     for &(x, y, b) in tiles {
         w.add_tile(TileId::new(12, x, y), b, &f).unwrap();
     }
@@ -173,17 +173,17 @@ fn land_is_what_the_sea_leaves() {
     let m = land.mask(&g, &opts);
     let both: f32 = sea.coverage.iter().zip(&m.coverage).map(|(a, b)| a + b).sum::<f32>() / m.coverage.len() as f32;
     assert!((both - 1.0).abs() < 1e-3, "sea + land = {both}");
-    assert!(m.water_fraction() > 0.5 && m.water_fraction() < 0.99, "{}", m.water_fraction());
+    assert!(m.fraction() > 0.5 && m.fraction() < 0.99, "{}", m.fraction());
     // Open sea has no land; a tile with nothing in it is all land.
     assert!(select(&[(1244, 1531, OPEN_SEA)], &["land"]).areas.is_empty());
     let empty = select(&[(1244, 1530, &[])], &["land"]);
-    assert!(empty.mask(&grid_over(1244, 1244, 1530), &opts).water_fraction() > 0.999);
+    assert!(empty.mask(&grid_over(1244, 1244, 1530), &opts).fraction() > 0.999);
 }
 
 #[cfg(feature = "dem")]
 mod elevation {
     use super::*;
-    use watermask::Elevation;
+    use terramask::Elevation;
 
     fn dem(tiles: &[(u32, u32)]) -> Elevation {
         let mut e = Elevation::new();
@@ -223,7 +223,7 @@ mod elevation {
         let opts = MaskOptions::default();
         let whole = sea.mask(&g, &opts);
         assert!(diff(&whole, &bands.mask(&g, &opts)) < 1e-3);
-        let parts: Vec<watermask::Mask> = [(f64::NEG_INFINITY, -20.0), (-20.0, -10.0), (-10.0, -5.0), (-5.0, f64::INFINITY)]
+        let parts: Vec<terramask::Mask> = [(f64::NEG_INFINITY, -20.0), (-20.0, -10.0), (-10.0, -5.0), (-5.0, f64::INFINITY)]
             .iter()
             .map(|&(lo, hi)| bands.within(lo, hi).mask(&g, &opts))
             .collect();
@@ -247,7 +247,7 @@ mod elevation {
         let island = select(&[(1244, 1529, ISLAND)], &["land"]);
         let hills = island.split(&dem(&[(1244, 1529)]), &[20.0]).unwrap().within(20.0, f64::INFINITY);
         assert_eq!(hills.areas.len(), 1);
-        let f = hills.mask(&grid_over(1244, 1244, 1529), &MaskOptions::default()).water_fraction();
+        let f = hills.mask(&grid_over(1244, 1244, 1529), &MaskOptions::default()).fraction();
         assert!(f > 0.05 && f < 0.6, "{f}");
         assert!(island.split(&Elevation::new(), &[0.0]).is_err());
     }
@@ -255,7 +255,7 @@ mod elevation {
 
 #[test]
 fn a_bad_tile_is_an_error_not_a_panic() {
-    let mut w = Water::new();
+    let mut w = Features::new();
     let e = w.add_tile(TileId::new(12, 1, 1), &[0x1a, 0xff, 0xff, 0xff], &Filter::default());
-    assert!(matches!(e, Err(watermask::Error::Data(_))));
+    assert!(matches!(e, Err(terramask::Error::Data(_))));
 }

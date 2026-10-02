@@ -14,7 +14,7 @@ use crate::{Elevation, TERRARIUM, TERRARIUM_ZOOM};
 /// Attribution: "© OpenMapTiles © OpenStreetMap contributors".
 pub const OPENFREEMAP: &str = "https://tiles.openfreemap.org/planet";
 
-const AGENT: &str = concat!("watermask/", env!("CARGO_PKG_VERSION"));
+const AGENT: &str = concat!("terramask/", env!("CARGO_PKG_VERSION"));
 
 /// How long a cached tile is used before it is downloaded again.
 pub const MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
@@ -174,7 +174,7 @@ impl Fetcher {
 
     /// The features for a grid, at the zoom that matches its resolution (see
     /// [`crate::zoom_for`]; the source's deepest zoom caps `limits`).
-    pub fn water_for(
+    pub fn features_for(
         &self,
         grid: &Grid,
         filter: &Filter,
@@ -280,12 +280,12 @@ fn tile_url(template: &str, id: TileId) -> String {
     template.replace("{z}", &id.z.to_string()).replace("{x}", &id.wrapped_x().to_string()).replace("{y}", &id.y.to_string())
 }
 
-/// `$WATERMASK_CACHE`, or the platform's cache folder: `~/Library/Caches/watermask`
-/// on macOS, `%LOCALAPPDATA%\watermask` on Windows, `$XDG_CACHE_HOME/watermask`
-/// or `~/.cache/watermask` elsewhere.
+/// `$TERRAMASK_CACHE`, or the platform's cache folder: `~/Library/Caches/terramask`
+/// on macOS, `%LOCALAPPDATA%\terramask` on Windows, `$XDG_CACHE_HOME/terramask`
+/// or `~/.cache/terramask` elsewhere.
 pub fn default_cache() -> PathBuf {
     let var = |k| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
-    if let Some(p) = var("WATERMASK_CACHE") {
+    if let Some(p) = var("TERRAMASK_CACHE") {
         return p;
     }
     let home = || var("HOME").or_else(|| var("USERPROFILE")).unwrap_or_default();
@@ -296,7 +296,7 @@ pub fn default_cache() -> PathBuf {
     } else {
         var("XDG_CACHE_HOME").unwrap_or_else(|| home().join(".cache"))
     };
-    base.join("watermask")
+    base.join("terramask")
 }
 
 /// Time since the file was written; forever when it is missing.
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn cached_tiles_serve_offline_and_old_ones_are_pruned() {
-        let dir = std::env::temp_dir().join(format!("watermask-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("terramask-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let fetcher = Fetcher { cache: Some(dir.clone()), ..Fetcher::with_source("http://127.0.0.1:9/{z}/{x}/{y}.pbf") };
         let source = fetcher.resolve().unwrap();

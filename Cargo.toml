@@ -1,19 +1,19 @@
 [workspace]
 members = [
-  "crates/watermask",
-  "crates/watermask-py",
-  "crates/watermask-node",
-  "crates/watermask-wasm",
+  "crates/terramask",
+  "crates/terramask-py",
+  "crates/terramask-node",
+  "crates/terramask-wasm",
 ]
 # py / node / wasm are built by maturin / napi / wasm-pack, not a plain cargo build.
-default-members = ["crates/watermask"]
+default-members = ["crates/terramask"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.0"
+version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/piLeoni/watermask"
+repository = "https://github.com/piLeoni/terramask"
 
 [profile.release]
 opt-level = 3

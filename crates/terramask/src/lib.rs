@@ -1,23 +1,26 @@
-//! Water masks for any area, from OpenStreetMap vector tiles fetched on demand,
-//! and the same for land, forests, glaciers, parks or any layer of the tiles.
+//! Masks, outlines, polygons and distance grids of the world's water, land,
+//! forests, glaciers, parks or any layer of OpenStreetMap vector tiles, for
+//! any area, from tiles fetched on demand; depth and height bands from terrain
+//! tiles.
 //!
-//! The sea, lakes, rivers, canals and docks come from the `water` and
-//! `waterway` layers of OpenMapTiles-schema vector tiles (OpenFreeMap by
-//! default); other layers are a [`Filter`] away. Only the tiles covering the
-//! area are read, at the zoom that matches the output resolution.
+//! Areas and lines come from OpenMapTiles-schema vector tiles (OpenFreeMap by
+//! default), picked by a [`Filter`]: the sea, lakes and rivers by default,
+//! presets such as `land`, `forest` or `parks`, or any layer and class. Only
+//! the tiles covering the area are read, at the zoom that matches the output
+//! resolution.
 //!
 //! ```no_run
 //! # #[cfg(feature = "fetch")] {
-//! use watermask::{Fetcher, Filter, Grid, MaskOptions, ZoomLimits};
+//! use terramask::{Fetcher, Filter, Grid, MaskOptions, ZoomLimits};
 //! let bounds = [-70.85, 41.3, -70.45, 41.55]; // west, south, east, north
 //! let grid = Grid::with_width(bounds, 1200);
-//! let water = Fetcher::new().water_for(&grid, &Filter::default(), &ZoomLimits::default(), |_, _| {})?;
+//! let water = Fetcher::new().features_for(&grid, &Filter::default(), &ZoomLimits::default(), |_, _| {})?;
 //! let mask = water.mask(&grid, &MaskOptions::default());
 //! let shore = mask.outlines();          // polylines in pixels
-//! let dist = mask.distance();           // pixels to the shore, + in water
-//! let woods = Fetcher::new().water_for(&grid, &Filter::parse(&["forest", "parks"])?, &ZoomLimits::default(), |_, _| {})?;
+//! let dist = mask.distance();           // pixels to the shore, + inside
+//! let woods = Fetcher::new().features_for(&grid, &Filter::parse(&["forest", "parks"])?, &ZoomLimits::default(), |_, _| {})?;
 //! # }
-//! # Ok::<(), watermask::Error>(())
+//! # Ok::<(), terramask::Error>(())
 //! ```
 //!
 //! Nothing here needs the network: [`Features::add_tile`] takes tile bytes
@@ -113,9 +116,6 @@ pub struct Features {
     pub areas: Vec<Area>,
     pub lines: Vec<Line>,
 }
-
-/// The name from before other layers could be read.
-pub type Water = Features;
 
 impl Features {
     pub fn new() -> Self {
@@ -326,14 +326,14 @@ impl Mask {
         contour::outlines(&self.coverage, self.width, self.height, 0.5)
     }
 
-    /// Distance to the shore in pixels: positive in water, negative on land.
+    /// Distance to the edge in pixels: positive inside, negative outside.
     /// Infinite where the grid has no shore at all.
     pub fn distance(&self) -> Vec<f32> {
         distance::signed(&self.coverage, self.width, self.height)
     }
 
-    /// Share of the grid that is water.
-    pub fn water_fraction(&self) -> f64 {
+    /// Share of the grid that is covered.
+    pub fn fraction(&self) -> f64 {
         self.coverage.iter().map(|&c| c as f64).sum::<f64>() / self.coverage.len().max(1) as f64
     }
 }

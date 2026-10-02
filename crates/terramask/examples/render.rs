@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use watermask::{Fetcher, Filter, Grid, MaskOptions, ZoomLimits};
+use terramask::{Fetcher, Filter, Grid, MaskOptions, ZoomLimits};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let limits = ZoomLimits::default();
     let source = fetcher.resolve()?;
     let z = grid.zoom(&ZoomLimits { max_zoom: limits.max_zoom.min(source.max_zoom), ..limits });
-    let water = fetcher.water_for(&grid, &Filter::default(), &limits, |_, _| {})?;
+    let water = fetcher.features_for(&grid, &Filter::default(), &limits, |_, _| {})?;
     let fetched = t.elapsed();
 
     let t = Instant::now();
@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "{w}×{h} px, zoom {z}, {} areas, {} lines · water {:.1}% · {} shore lines · farthest from shore {far:.0} px · fetch {:.2?}, mask+outlines+distance {:.2?}",
         water.areas.len(),
         water.lines.len(),
-        mask.water_fraction() * 100.0,
+        mask.fraction() * 100.0,
         outlines.len(),
         fetched,
         drawn

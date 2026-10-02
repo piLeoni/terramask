@@ -11,4 +11,4 @@ node/*.node
 .DS_Store
 node/npm/
 node/artifacts/
-crates/watermask-wasm/pkg/
+crates/terramask-wasm/pkg/

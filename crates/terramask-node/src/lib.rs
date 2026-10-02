@@ -1,9 +1,9 @@
-//! Node.js bindings (N-API): the native addon behind the `watermask` npm package.
+//! Node.js bindings (N-API): the native addon behind the `terramask` npm package.
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-fn js_err(e: watermask::Error) -> Error {
+fn js_err(e: terramask::Error) -> Error {
     Error::from_reason(e.to_string())
 }
 
@@ -11,14 +11,14 @@ fn bounds(b: &[f64]) -> Result<[f64; 4]> {
     b.try_into().map_err(|_| Error::from_reason("bounds must be [west, south, east, north]"))
 }
 
-fn grid(b: &[f64], width: u32, height: Option<u32>) -> Result<watermask::Grid> {
+fn grid(b: &[f64], width: u32, height: Option<u32>) -> Result<terramask::Grid> {
     let b = bounds(b)?;
     if width == 0 || height == Some(0) {
         return Err(Error::from_reason("width and height must be positive"));
     }
     Ok(match height {
-        Some(h) => watermask::Grid::new(b, width as usize, h as usize),
-        None => watermask::Grid::with_width(b, width as usize),
+        Some(h) => terramask::Grid::new(b, width as usize, h as usize),
+        None => terramask::Grid::with_width(b, width as usize),
     })
 }
 
@@ -37,22 +37,22 @@ pub struct FilterOptions {
     pub tunnels: Option<bool>,
 }
 
-fn filter(o: Option<&FilterOptions>) -> Result<watermask::Filter> {
-    let Some(o) = o else { return Ok(watermask::Filter::default()) };
+fn filter(o: Option<&FilterOptions>) -> Result<terramask::Filter> {
+    let Some(o) = o else { return Ok(terramask::Filter::default()) };
     let owned = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     let f = match &o.select {
-        Some(s) if o.areas.is_none() && o.lines.is_none() => watermask::Filter::parse(s).map_err(js_err)?,
+        Some(s) if o.areas.is_none() && o.lines.is_none() => terramask::Filter::parse(s).map_err(js_err)?,
         Some(_) => return Err(Error::from_reason("give select, or areas and lines, not both")),
-        None => watermask::Filter::water(
-            &o.areas.clone().unwrap_or_else(|| owned(watermask::Filter::DEFAULT_AREAS)),
-            &o.lines.clone().unwrap_or_else(|| owned(watermask::Filter::DEFAULT_LINES)),
+        None => terramask::Filter::water(
+            &o.areas.clone().unwrap_or_else(|| owned(terramask::Filter::DEFAULT_AREAS)),
+            &o.lines.clone().unwrap_or_else(|| owned(terramask::Filter::DEFAULT_LINES)),
         ),
     };
-    Ok(watermask::Filter { intermittent: o.intermittent.unwrap_or(false), tunnels: o.tunnels.unwrap_or(false), ..f })
+    Ok(terramask::Filter { intermittent: o.intermittent.unwrap_or(false), tunnels: o.tunnels.unwrap_or(false), ..f })
 }
 
-fn fetcher(source: &Option<String>, cache: &Option<String>, no_cache: Option<bool>) -> watermask::Fetcher {
-    let mut f = watermask::Fetcher::new();
+fn fetcher(source: &Option<String>, cache: &Option<String>, no_cache: Option<bool>) -> terramask::Fetcher {
+    let mut f = terramask::Fetcher::new();
     if let Some(s) = source {
         f.source = s.clone();
     }
@@ -89,10 +89,10 @@ fn pack(lines: &[Vec<[f32; 2]>]) -> (Float32Array, Uint32Array) {
     (Float32Array::new(pts), Uint32Array::new(ends))
 }
 
-/// Water coverage of a grid.
+/// Coverage of a grid.
 #[napi]
 pub struct Mask {
-    inner: watermask::Mask,
+    inner: terramask::Mask,
 }
 
 #[napi]
@@ -107,7 +107,7 @@ impl Mask {
         self.inner.height as u32
     }
 
-    /// Fraction of each pixel that is water, row 0 at the top.
+    /// Fraction of each pixel covered, row 0 at the top.
     #[napi]
     pub fn coverage(&self) -> Float32Array {
         Float32Array::new(self.inner.coverage.clone())
@@ -120,22 +120,22 @@ impl Mask {
         pack(&self.inner.outlines())
     }
 
-    /// Pixels to the shore: positive in water, negative on land.
+    /// Pixels to the edge: positive inside, negative outside.
     #[napi]
     pub fn distance(&self) -> Float32Array {
         Float32Array::new(self.inner.distance())
     }
 }
 
-/// Water gathered from vector tiles.
+/// Areas and lines gathered from vector tiles.
 #[napi]
 #[derive(Default)]
-pub struct Water {
-    inner: watermask::Water,
+pub struct Features {
+    inner: terramask::Features,
 }
 
 #[napi]
-impl Water {
+impl Features {
     #[napi(constructor)]
     pub fn new() -> Self {
         Self::default()
@@ -145,32 +145,32 @@ impl Water {
     #[napi]
     pub fn add_tile(&mut self, z: u32, x: u32, y: u32, data: &[u8], filter_options: Option<FilterOptions>) -> Result<()> {
         let f = filter(filter_options.as_ref())?;
-        self.inner.add_tile(watermask::TileId::new(z as u8, x, y), data, &f).map_err(js_err)
+        self.inner.add_tile(terramask::TileId::new(z as u8, x, y), data, &f).map_err(js_err)
     }
 
     /// The areas and lines matching presets or `layer:class` rules.
     #[napi]
-    pub fn subset(&self, select: Vec<String>) -> Result<Water> {
-        let f = watermask::Filter::parse(&select).map_err(js_err)?;
-        Ok(Water { inner: self.inner.subset(&f) })
+    pub fn subset(&self, select: Vec<String>) -> Result<Features> {
+        let f = terramask::Filter::parse(&select).map_err(js_err)?;
+        Ok(Features { inner: self.inner.subset(&f) })
     }
 
     /// Every area cut into elevation bands at `levels` (metres, depths
     /// negative): below the lowest, between each pair, above the highest.
     #[napi]
-    pub fn split(&self, elevation: &Elevation, levels: Vec<f64>) -> Result<Water> {
-        Ok(Water { inner: self.inner.split(&elevation.inner, &levels).map_err(js_err)? })
+    pub fn split(&self, elevation: &Elevation, levels: Vec<f64>) -> Result<Features> {
+        Ok(Features { inner: self.inner.split(&elevation.inner, &levels).map_err(js_err)? })
     }
 
     /// The bands of a split that lie within `low`..`high` metres.
     #[napi]
-    pub fn within(&self, low: Option<f64>, high: Option<f64>) -> Water {
-        Water { inner: self.inner.within(low.unwrap_or(f64::NEG_INFINITY), high.unwrap_or(f64::INFINITY)) }
+    pub fn within(&self, low: Option<f64>, high: Option<f64>) -> Features {
+        Features { inner: self.inner.within(low.unwrap_or(f64::NEG_INFINITY), high.unwrap_or(f64::INFINITY)) }
     }
 
     #[napi]
     pub fn areas(&self) -> Vec<AreaInfo> {
-        let end = |a: &watermask::Area, i: usize| a.elevation.map(|e| e[i]).filter(|v| v.is_finite());
+        let end = |a: &terramask::Area, i: usize| a.elevation.map(|e| e[i]).filter(|v| v.is_finite());
         self.inner
             .areas
             .iter()
@@ -190,7 +190,7 @@ impl Water {
         line_width: Option<f64>,
     ) -> Result<Mask> {
         let g = grid(&bounds, width, height)?;
-        let opts = watermask::MaskOptions { supersample: supersample.unwrap_or(4), line_width: line_width.unwrap_or(0.0) };
+        let opts = terramask::MaskOptions { supersample: supersample.unwrap_or(4), line_width: line_width.unwrap_or(0.0) };
         Ok(Mask { inner: self.inner.mask(&g, &opts) })
     }
 
@@ -211,7 +211,7 @@ impl Water {
     pub fn geojson(&self, options: Option<GeoJsonOptions>) -> Result<String> {
         let o = options.unwrap_or_default();
         let bounds = o.bounds.as_deref().map(bounds).transpose()?;
-        Ok(self.inner.to_geojson(&watermask::GeoJsonOptions { pieces: o.pieces.unwrap_or(false), bounds }))
+        Ok(self.inner.to_geojson(&terramask::GeoJsonOptions { pieces: o.pieces.unwrap_or(false), bounds }))
     }
 
     #[napi(getter)]
@@ -250,7 +250,7 @@ pub struct FetchOptions {
     pub tunnels: Option<bool>,
     /// TileJSON URL or {z}/{x}/{y} template; default OpenFreeMap.
     pub source: Option<String>,
-    /// Cache directory; default $WATERMASK_CACHE or the platform's cache folder.
+    /// Cache directory; default $TERRAMASK_CACHE or the platform's cache folder.
     pub cache: Option<String>,
     pub no_cache: Option<bool>,
     pub max_tiles: Option<u32>,
@@ -259,7 +259,7 @@ pub struct FetchOptions {
 /// Download (or read from the cache) the water in a box, or what `select`
 /// names. Blocks until done.
 #[napi]
-pub fn fetch(bounds: Vec<f64>, options: Option<FetchOptions>) -> Result<Water> {
+pub fn fetch(bounds: Vec<f64>, options: Option<FetchOptions>) -> Result<Features> {
     let o = options.unwrap_or_default();
     let fetcher = fetcher(&o.source, &o.cache, o.no_cache);
     let f = filter(Some(&FilterOptions {
@@ -273,20 +273,20 @@ pub fn fetch(bounds: Vec<f64>, options: Option<FetchOptions>) -> Result<Water> {
         (Some(z), _) => fetcher.water(self::bounds(&bounds)?, z as u8, &f, |_, _| {}),
         (None, Some(w)) => {
             let g = grid(&bounds, w, o.height)?;
-            let limits = watermask::ZoomLimits { max_tiles: o.max_tiles.unwrap_or(256) as usize, ..Default::default() };
-            fetcher.water_for(&g, &f, &limits, |_, _| {})
+            let limits = terramask::ZoomLimits { max_tiles: o.max_tiles.unwrap_or(256) as usize, ..Default::default() };
+            fetcher.features_for(&g, &f, &limits, |_, _| {})
         }
         (None, None) => return Err(Error::from_reason("give options.width (or options.zoom)")),
     }
     .map_err(js_err)?;
-    Ok(Water { inner })
+    Ok(Features { inner })
 }
 
 /// Terrain heights in metres (sea floor negative) from elevation tiles.
 #[napi]
 #[derive(Default)]
 pub struct Elevation {
-    inner: watermask::Elevation,
+    inner: terramask::Elevation,
 }
 
 #[napi]
@@ -299,7 +299,7 @@ impl Elevation {
     /// Read one Terrarium PNG. Tiles must share one zoom.
     #[napi]
     pub fn add_tile(&mut self, z: u32, x: u32, y: u32, data: &[u8]) -> Result<()> {
-        self.inner.add_tile(watermask::TileId::new(z as u8, x, y), data).map_err(js_err)
+        self.inner.add_tile(terramask::TileId::new(z as u8, x, y), data).map_err(js_err)
     }
 
     /// Metres at the pixel centres of the grid, row 0 at the top; NaN
@@ -354,7 +354,7 @@ pub fn fetch_elevation(bounds: Vec<f64>, options: Option<ElevationOptions>) -> R
         (Some(z), _) => fetcher.elevation(self::bounds(&bounds)?, z as u8, |_, _| {}),
         (None, Some(w)) => {
             let g = grid(&bounds, w, o.height)?;
-            let limits = watermask::ZoomLimits { max_tiles: o.max_tiles.unwrap_or(256) as usize, ..Default::default() };
+            let limits = terramask::ZoomLimits { max_tiles: o.max_tiles.unwrap_or(256) as usize, ..Default::default() };
             fetcher.elevation_for(&g, &limits, |_, _| {})
         }
         (None, None) => return Err(Error::from_reason("give options.width (or options.zoom)")),
@@ -366,21 +366,21 @@ pub fn fetch_elevation(bounds: Vec<f64>, options: Option<ElevationOptions>) -> R
 /// Preset names and the rules they stand for.
 #[napi]
 pub fn presets() -> std::collections::HashMap<String, String> {
-    watermask::PRESETS.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    terramask::PRESETS.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
 }
 
 /// Tile zoom with at least the detail of `width` pixels across the box.
 #[napi]
 pub fn zoom_for(bounds: Vec<f64>, width: u32, max_tiles: Option<u32>, max_zoom: Option<u32>) -> Result<u32> {
     let limits =
-        watermask::ZoomLimits { max_zoom: max_zoom.map_or(watermask::MAX_ZOOM, |z| z as u8), max_tiles: max_tiles.unwrap_or(256) as usize };
-    Ok(watermask::zoom_for(&self::bounds(&bounds)?, width as usize, &limits) as u32)
+        terramask::ZoomLimits { max_zoom: max_zoom.map_or(terramask::MAX_ZOOM, |z| z as u8), max_tiles: max_tiles.unwrap_or(256) as usize };
+    Ok(terramask::zoom_for(&self::bounds(&bounds)?, width as usize, &limits) as u32)
 }
 
 /// Tiles covering the box as [z, x, y] (x may exceed 2^z - 1 across 180°).
 #[napi]
 pub fn tiles_for(bounds: Vec<f64>, zoom: u32) -> Result<Vec<Vec<u32>>> {
-    Ok(watermask::tiles_for(&self::bounds(&bounds)?, zoom as u8).into_iter().map(|t| vec![t.z as u32, t.x, t.y]).collect())
+    Ok(terramask::tiles_for(&self::bounds(&bounds)?, zoom as u8).into_iter().map(|t| vec![t.z as u32, t.x, t.y]).collect())
 }
 
 #[napi]

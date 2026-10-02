@@ -3,13 +3,13 @@ requires = ["maturin>=1.7,<2"]
 build-backend = "maturin"
 
 [project]
-name = "watermask"
+name = "terramask"
 dynamic = ["version"]
-description = "Water, land, forest or park masks, outlines and distance grids for any area, from OpenStreetMap vector tiles fetched on demand; depth and height bands from terrain tiles"
+description = "Masks, outlines, polygons and distance grids of water, land, forests, parks or any OpenStreetMap layer, for any area, from vector tiles fetched on demand; depth and height bands from terrain tiles"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
-keywords = ["gis", "openstreetmap", "coastline", "water", "vector-tiles", "raster"]
+keywords = ["gis", "openstreetmap", "coastline", "water", "land", "forest", "elevation", "bathymetry", "vector-tiles", "raster"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Rust",
@@ -21,12 +21,12 @@ dependencies = ["numpy>=1.26"]
 dev = ["pytest>=8"]
 
 [project.urls]
-Repository = "https://github.com/piLeoni/watermask"
+Repository = "https://github.com/piLeoni/terramask"
 
 [tool.maturin]
-manifest-path = "crates/watermask-py/Cargo.toml"
+manifest-path = "crates/terramask-py/Cargo.toml"
 python-source = "python"
-module-name = "watermask._watermask"
+module-name = "terramask._terramask"
 include = [{ path = "LICENSE", format = "sdist" }]
 
 [tool.pytest.ini_options]

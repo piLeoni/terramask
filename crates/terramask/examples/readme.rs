@@ -3,7 +3,7 @@
 //!     cargo run --release --example readme              # writes docs/*.png
 //!     cargo run --release --example readme -- venice    # only docs/venice.png
 
-use watermask::{Fetcher, Filter, Grid, Mask, MaskOptions, Water, ZoomLimits};
+use terramask::{Features, Fetcher, Filter, Grid, Mask, MaskOptions, ZoomLimits};
 
 use tiny_skia::{Color, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
@@ -42,11 +42,11 @@ fn zones(path: &std::path::Path, grid: Grid) -> Result<(), Box<dyn std::error::E
     let fetcher = Fetcher::new();
     let limits = ZoomLimits::default();
     let f = Filter::parse(&["ocean", "land", "forest"])?;
-    let all = fetcher.water_for(&grid, &f, &limits, |_, _| {})?;
+    let all = fetcher.features_for(&grid, &f, &limits, |_, _| {})?;
     // The sea floor from the default terrain zoom, the hills from deeper.
     let sea_floor = fetcher.elevation_for(&grid, &limits, |_, _| {})?;
     let mut detailed = Fetcher::new();
-    detailed.elevation_max_zoom = watermask::TERRARIUM_MAX_ZOOM;
+    detailed.elevation_max_zoom = terramask::TERRARIUM_MAX_ZOOM;
     let hills = detailed.elevation_for(&grid, &limits, |_, _| {})?;
     let sea = all.subset(&Filter::parse(&["ocean"])?).split(&sea_floor, &[-30.0, -20.0, -10.0, -5.0])?;
     let land = all.subset(&Filter::parse(&["land"])?).split(&hills, &[15.0, 30.0, 50.0])?;
@@ -55,7 +55,7 @@ fn zones(path: &std::path::Path, grid: Grid) -> Result<(), Box<dyn std::error::E
     let opts = MaskOptions::default();
     let mut pm = Pixmap::new(grid.width as u32, grid.height as u32).unwrap();
     pm.fill(Color::WHITE);
-    let fill = |pm: &mut Pixmap, part: &Water, rgb: [u8; 3], alpha: f32| {
+    let fill = |pm: &mut Pixmap, part: &Features, rgb: [u8; 3], alpha: f32| {
         let m = part.mask(&grid, &opts);
         for (px, &c) in pm.data_mut().as_chunks_mut::<4>().0.iter_mut().zip(&m.coverage) {
             let a = c * alpha;
@@ -75,7 +75,7 @@ fn zones(path: &std::path::Path, grid: Grid) -> Result<(), Box<dyn std::error::E
         fill(&mut pm, &land.within(lo, hi), [v as u8, (v - 4.0) as u8, (v - 14.0) as u8], 1.0);
     }
     fill(&mut pm, &woods, [74, 120, 64], 0.45);
-    let edges = |part: &Water| part.mask(&grid, &opts).outlines();
+    let edges = |part: &Features| part.mask(&grid, &opts).outlines();
     for level in [-30.0, -20.0, -10.0, -5.0] {
         stroke(&mut pm, &edges(&sea.within(f64::NEG_INFINITY, level)), 0.5, 255);
     }
@@ -88,16 +88,16 @@ fn zones(path: &std::path::Path, grid: Grid) -> Result<(), Box<dyn std::error::E
 
 /// Bounds centred on lon, lat, `span` degrees wide, with the aspect of w×h.
 fn around(lon: f64, lat: f64, span: f64, w: usize, h: usize) -> [f64; 4] {
-    let [x, y] = watermask::lonlat_to_merc(lon, lat);
-    let half_w = watermask::lonlat_to_merc(span / 2.0, 0.0)[0];
+    let [x, y] = terramask::lonlat_to_merc(lon, lat);
+    let half_w = terramask::lonlat_to_merc(span / 2.0, 0.0)[0];
     let half_h = half_w * h as f64 / w as f64;
-    let [west, south] = watermask::merc_to_lonlat(x - half_w, y - half_h);
-    let [east, north] = watermask::merc_to_lonlat(x + half_w, y + half_h);
+    let [west, south] = terramask::merc_to_lonlat(x - half_w, y - half_h);
+    let [east, north] = terramask::merc_to_lonlat(x + half_w, y + half_h);
     [west, south, east, north]
 }
 
-fn fetch(grid: &Grid) -> Result<Water, watermask::Error> {
-    Fetcher::new().water_for(grid, &Filter::default(), &ZoomLimits::default(), |_, _| {})
+fn fetch(grid: &Grid) -> Result<Features, terramask::Error> {
+    Fetcher::new().features_for(grid, &Filter::default(), &ZoomLimits::default(), |_, _| {})
 }
 
 fn waterlines(path: &std::path::Path, bounds: [f64; 4], width: usize) -> Result<(), Box<dyn std::error::Error>> {
@@ -106,7 +106,7 @@ fn waterlines(path: &std::path::Path, bounds: [f64; 4], width: usize) -> Result<
     const K: f32 = 2.0;
     let grid = Grid::with_width(bounds, width * K as usize);
     let water = fetch(&grid)?;
-    let sea = Water { areas: water.areas.iter().filter(|a| a.class == "ocean").cloned().collect(), lines: Vec::new() };
+    let sea = Features { areas: water.areas.iter().filter(|a| a.class == "ocean").cloned().collect(), lines: Vec::new() };
     let opts = MaskOptions::default();
     let dist = sea.mask(&grid, &opts).distance();
 
@@ -125,7 +125,7 @@ fn waterlines(path: &std::path::Path, bounds: [f64; 4], width: usize) -> Result<
         let grey = ((d / FAR).powf(0.7) * 200.0) as u8;
         stroke(&mut pm, &scale(band.outlines(), 1.0 / K), 0.55, grey);
     }
-    let inland = Water { areas: water.areas.iter().filter(|a| a.class != "ocean").cloned().collect(), lines: Vec::new() };
+    let inland = Features { areas: water.areas.iter().filter(|a| a.class != "ocean").cloned().collect(), lines: Vec::new() };
     stroke(&mut pm, &scale(inland.mask(&grid, &opts).outlines(), 1.0 / K), 0.6, 90);
     stroke(&mut pm, &scale(sea.mask(&grid, &opts).outlines(), 1.0 / K), 1.3, 0);
     frame(&mut pm);

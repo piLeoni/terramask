@@ -106,7 +106,7 @@ impl Filter {
     /// or `layer:*` for every feature of a layer.
     ///
     /// ```
-    /// let f = watermask::Filter::parse(&["forest", "parks", "landuse:cemetery"]).unwrap();
+    /// let f = terramask::Filter::parse(&["forest", "parks", "landuse:cemetery"]).unwrap();
     /// assert!(f.matches("landcover", "wood") && f.matches("park", "nature_reserve"));
     /// ```
     pub fn parse<S: AsRef<str>>(items: &[S]) -> Result<Self, Error> {
