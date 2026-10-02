@@ -1,9 +1,10 @@
-//! Water masks for any area, from OpenStreetMap vector tiles fetched on demand.
+//! Water masks for any area, from OpenStreetMap vector tiles fetched on demand,
+//! and the same for land, forests, glaciers, parks or any layer of the tiles.
 //!
 //! The sea, lakes, rivers, canals and docks come from the `water` and
 //! `waterway` layers of OpenMapTiles-schema vector tiles (OpenFreeMap by
-//! default). Only the tiles covering the area are read, at the zoom that
-//! matches the output resolution.
+//! default); other layers are a [`Filter`] away. Only the tiles covering the
+//! area are read, at the zoom that matches the output resolution.
 //!
 //! ```no_run
 //! # #[cfg(feature = "fetch")] {
@@ -14,15 +15,20 @@
 //! let mask = water.mask(&grid, &MaskOptions::default());
 //! let shore = mask.outlines();          // polylines in pixels
 //! let dist = mask.distance();           // pixels to the shore, + in water
+//! let woods = Fetcher::new().water_for(&grid, &Filter::parse(&["forest", "parks"])?, &ZoomLimits::default(), |_, _| {})?;
 //! # }
 //! # Ok::<(), watermask::Error>(())
 //! ```
 //!
-//! Nothing here needs the network: [`Water::add_tile`] takes tile bytes from
-//! anywhere. The `fetch` feature adds [`Fetcher`], which downloads and caches
-//! them.
+//! Nothing here needs the network: [`Features::add_tile`] takes tile bytes
+//! from anywhere. The `fetch` feature adds [`Fetcher`], which downloads and
+//! caches them. The `dem` feature adds [`Elevation`], from terrain tiles, to
+//! cut areas into depth or height bands; those tiles are only fetched when
+//! asked for.
 
 mod contour;
+#[cfg(feature = "dem")]
+mod dem;
 mod distance;
 #[cfg(feature = "fetch")]
 mod fetch;
@@ -30,12 +36,18 @@ mod geojson;
 mod merge;
 mod mvt;
 mod raster;
+mod select;
 mod tile;
 
 use std::fmt;
 
+use i_overlay::core::overlay_rule::OverlayRule;
+
+#[cfg(feature = "dem")]
+pub use dem::{Elevation, TERRARIUM, TERRARIUM_MAX_ZOOM, TERRARIUM_ZOOM};
 #[cfg(feature = "fetch")]
 pub use fetch::{default_cache, Fetcher, Source, MAX_AGE, OPENFREEMAP};
+pub use select::{Filter, Rule, LAND, PRESETS};
 pub use tile::{lonlat_to_merc, merc_to_lonlat, tiles_for, zoom_for, Bounds, TileId, MAX_ZOOM};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,92 +70,108 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Which features count as water. Classes are those of the OpenMapTiles
-/// schema: areas `ocean`, `lake`, `river`, `dock`, `pond`, `swimming_pool`;
-/// lines `river`, `canal`, `stream`, `ditch`, `drain`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Filter {
-    pub areas: Vec<String>,
-    pub lines: Vec<String>,
-    /// Keep water that is only there part of the year.
-    pub intermittent: bool,
-    /// Keep water that runs underground (culverts, covered channels).
-    pub tunnels: bool,
-}
-
-impl Default for Filter {
-    fn default() -> Self {
-        let s = |v: &[&str]| v.iter().map(|c| c.to_string()).collect();
-        Filter {
-            areas: s(&["ocean", "lake", "river", "dock"]),
-            lines: s(&["river", "canal", "stream"]),
-            intermittent: false,
-            tunnels: false,
-        }
-    }
-}
-
-/// A closed ring in Web Mercator metres. Exterior rings bound water, the
-/// others are islands in it.
+/// A closed ring in Web Mercator metres. Exterior rings bound the area, the
+/// others are holes in it (islands, for water).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ring {
     pub exterior: bool,
     pub points: Vec<[f64; 2]>,
 }
 
-/// One water area, as cut by its tile.
+/// One area, as cut by its tile.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Area {
+    /// Tile layer (`water`, `landcover`, `park`…), or [`LAND`].
+    pub layer: String,
     pub class: String,
     pub rings: Vec<Ring>,
+    /// Elevation band in metres, lowest and highest, open ends infinite:
+    /// set by [`Features::split`].
+    pub elevation: Option<[f64; 2]>,
 }
 
-/// One waterway centre line, as cut by its tile, in Web Mercator metres.
+impl Area {
+    fn without_rings(&self) -> Area {
+        Area { layer: self.layer.clone(), class: self.class.clone(), rings: Vec::new(), elevation: self.elevation }
+    }
+}
+
+/// One line (a waterway centre line, say), as cut by its tile, in Web
+/// Mercator metres.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Line {
+    pub layer: String,
     pub class: String,
     pub points: Vec<[f64; 2]>,
 }
 
-/// Water collected from tiles. Each tile's features are cut to the tile, so
-/// neighbouring tiles meet edge to edge without overlapping; an area spanning
-/// several tiles is several pieces.
+/// Areas and lines collected from tiles. Each tile's features are cut to the
+/// tile, so neighbouring tiles meet edge to edge without overlapping; an area
+/// spanning several tiles is several pieces.
 #[derive(Debug, Clone, Default)]
-pub struct Water {
+pub struct Features {
     pub areas: Vec<Area>,
     pub lines: Vec<Line>,
 }
 
-impl Water {
+/// The name from before other layers could be read.
+pub type Water = Features;
+
+impl Features {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Read one vector tile (raw or gzipped protobuf) and keep the water that
-    /// passes `filter`.
+    /// Read one vector tile (raw or gzipped protobuf) and keep the features
+    /// that pass `filter`. With [`LAND`] in the filter, an empty tile is all
+    /// land: tile sources leave out tiles with nothing in them, and the sea
+    /// is always something.
     pub fn add_tile(&mut self, id: TileId, bytes: &[u8], filter: &Filter) -> Result<(), Error> {
-        let t = mvt::read_water(bytes, filter).map_err(|e| Error::Data(format!("tile {id}: {e}")))?;
+        let t = mvt::read(bytes, filter).map_err(|e| Error::Data(format!("tile {id}: {e}")))?;
         let [x0, _, _, y1] = id.merc_bounds();
         let size = id.merc_size();
         let to_merc = |pts: Vec<[f64; 2]>| pts.into_iter().map(|p| [x0 + p[0] * size, y1 - p[1] * size]).collect();
+        let ring = |r: Ring| Ring { exterior: r.exterior, points: to_merc(r.points) };
         for a in t.areas {
-            let rings = a.rings.into_iter().map(|r| Ring { exterior: r.exterior, points: to_merc(r.points) }).collect();
-            self.areas.push(Area { class: a.class, rings });
+            self.areas.push(Area { rings: a.rings.into_iter().map(ring).collect(), ..a });
         }
         for l in t.lines {
-            self.lines.push(Line { class: l.class, points: to_merc(l.points) });
+            self.lines.push(Line { points: to_merc(l.points), ..l });
+        }
+        if filter.land() {
+            let sea: Vec<Ring> = t.sea.into_iter().map(ring).collect();
+            let rings = merge::overlay(&merge::rect(id.merc_bounds()), &merge::paths(&sea), OverlayRule::Difference);
+            if !rings.is_empty() {
+                self.areas.push(Area { layer: LAND.into(), class: LAND.into(), rings, elevation: None });
+            }
         }
         Ok(())
     }
 
-    /// Water coverage on a north-up Web Mercator grid.
+    /// The areas and lines whose layer and class pass `filter` (its
+    /// `intermittent` and `tunnels` play no part here).
+    pub fn subset(&self, filter: &Filter) -> Features {
+        Features {
+            areas: self.areas.iter().filter(|a| filter.matches(&a.layer, &a.class)).cloned().collect(),
+            lines: self.lines.iter().filter(|l| filter.matches(&l.layer, &l.class)).cloned().collect(),
+        }
+    }
+
+    /// The areas whose elevation band lies within `low..=high` metres (see
+    /// [`Features::split`]); lines are kept.
+    pub fn within(&self, low: f64, high: f64) -> Features {
+        let inside = |a: &&Area| a.elevation.is_some_and(|[lo, hi]| lo >= low && hi <= high);
+        Features { areas: self.areas.iter().filter(inside).cloned().collect(), lines: self.lines.clone() }
+    }
+
+    /// Coverage on a north-up Web Mercator grid.
     pub fn mask(&self, grid: &Grid, opts: &MaskOptions) -> Mask {
         let [x0, y0, x1, y1] = grid.merc;
         let (sx, sy) = (grid.width as f64 / (x1 - x0), grid.height as f64 / (y1 - y0));
         self.rasterize(grid.width, grid.height, opts, &|p| [(p[0] - x0) * sx, (y1 - p[1]) * sy])
     }
 
-    /// Water coverage on any grid: `project` takes lon, lat in degrees and
+    /// Coverage on any grid: `project` takes lon, lat in degrees and
     /// returns the pixel position (x right, y down, pixel centres at +0.5).
     pub fn mask_with(&self, width: usize, height: usize, opts: &MaskOptions, project: impl Fn(f64, f64) -> [f64; 2]) -> Mask {
         self.rasterize(width, height, opts, &|p| {
@@ -168,38 +196,39 @@ impl Water {
         Mask { width, height, coverage: r.fill(opts.supersample.max(1)) }
     }
 
-    /// Waterway lines on a Web Mercator grid, in pixels, in the order of
-    /// [`Water::lines`].
+    /// Lines on a Web Mercator grid, in pixels, in the order of
+    /// [`Features::lines`].
     pub fn lines_on(&self, grid: &Grid) -> Vec<Vec<[f32; 2]>> {
         self.lines.iter().map(|l| l.points.iter().map(|&p| grid.merc_to_px(p)).collect()).collect()
     }
 
-    /// The areas of each class joined across tile edges into one [`Area`],
-    /// each exterior ring followed by its islands; with `bounds`, areas and
-    /// lines cut to that box. Lines are not joined.
-    pub fn merged(&self, bounds: Option<Bounds>) -> Water {
+    /// The areas of each layer, class and elevation band joined across tile
+    /// edges into one [`Area`], each exterior ring followed by its holes;
+    /// with `bounds`, areas and lines cut to that box. Lines are not joined.
+    pub fn merged(&self, bounds: Option<Bounds>) -> Features {
         self.reshaped(true, bounds)
     }
 
     /// Areas and lines cut to `bounds`, the tile pieces kept apart.
-    pub fn clipped(&self, bounds: Bounds) -> Water {
+    pub fn clipped(&self, bounds: Bounds) -> Features {
         self.reshaped(false, Some(bounds))
     }
 
-    fn reshaped(&self, merge: bool, bounds: Option<Bounds>) -> Water {
+    fn reshaped(&self, merge: bool, bounds: Option<Bounds>) -> Features {
         let clip = bounds.map(|b| tile::merc_extent(&b));
-        Water { areas: merge::areas(&self.areas, merge, clip), lines: merge::lines(&self.lines, clip) }
+        Features { areas: merge::areas(&self.areas, merge, clip), lines: merge::lines(&self.lines, clip) }
     }
 
-    /// Everything as a GeoJSON FeatureCollection in lon/lat, with a `class`
-    /// property per feature: one MultiPolygon per area class (or per tile
-    /// piece with `pieces`), one LineString per waterway piece.
+    /// Everything as a GeoJSON FeatureCollection in lon/lat, with `layer`
+    /// and `class` properties (and `min`, `max` metres for elevation bands):
+    /// one MultiPolygon per layer, class and band (or per tile piece with
+    /// `pieces`), one LineString per line piece.
     pub fn to_geojson(&self, opts: &GeoJsonOptions) -> String {
         geojson::write(&self.reshaped(!opts.pieces, opts.bounds))
     }
 }
 
-/// How [`Water::to_geojson`] shapes its output.
+/// How [`Features::to_geojson`] shapes its output.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct GeoJsonOptions {
     /// Keep areas as the pieces the tiles cut them into, instead of joined.
@@ -280,7 +309,8 @@ impl Default for MaskOptions {
     }
 }
 
-/// Fraction of each pixel covered by water, row 0 at the top.
+/// Fraction of each pixel covered by the areas, row 0 at the top. Below,
+/// "water" is whatever the areas are: forest, land, a depth band.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mask {
     pub width: usize,

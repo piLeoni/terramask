@@ -6,6 +6,10 @@ comes from OpenStreetMap vector tiles fetched on demand, so there is nothing to
 download in advance: only the tiles covering the area, at the zoom that matches
 the output resolution.
 
+The same works for land, forests, glaciers, parks or any other layer of the
+tiles, and areas can be cut into depth or height bands from terrain tiles,
+fetched only when asked for ([below](#beyond-water)).
+
 One Rust core, published for Rust, Python, Node.js and the browser (WebAssembly).
 
 ![Cape Cod, Martha's Vineyard and Nantucket: the shoreline, and lines following it out to sea](https://raw.githubusercontent.com/piLeoni/watermask/v0.1.0/docs/cape-cod.png)
@@ -36,6 +40,71 @@ mask.distance()    # pixels to the shore, positive in water, negative on land
 water.geojson()    # the water as GeoJSON in lon/lat, one MultiPolygon per class
 ```
 
+## Beyond water
+
+![Martha's Vineyard: the sea in depth zones, the land in heights, the woods in green](https://raw.githubusercontent.com/piLeoni/watermask/v0.3.0/docs/vineyard-zones.png)
+
+<sub>Martha's Vineyard. The sea from OpenStreetMap, cut into zones at 5, 10, 20 and
+30 m deep by terrain tiles; the land cut at 15, 30 and 50 m; the woods from the
+`landcover` layer. The shoreline stays OpenStreetMap's: the terrain only decides
+where one zone meets the next.</sub>
+
+`select` picks other layers by preset or by rule; everything else (masks,
+outlines, distance, GeoJSON) works the same:
+
+```python
+land = watermask.fetch(vineyard, width=1200, select="land")             # what the sea leaves
+green = watermask.fetch(vineyard, width=1200, select=["forest", "parks"])
+green.subset("forest")                                                  # one of the two
+watermask.fetch(vineyard, width=1200, select=["landuse:cemetery", "park:*"])   # layer:class rules
+```
+
+| preset     | rules                                                     |
+|------------|-----------------------------------------------------------|
+| `water`    | `water:ocean,lake,river,dock waterway:river,canal,stream` (the default) |
+| `ocean`    | `water:ocean`                                             |
+| `lakes`    | `water:lake`                                              |
+| `rivers`   | `water:river waterway:river,stream`                       |
+| `land`     | each tile less its `ocean`                                |
+| `forest`, `glacier`, `wetland`, `sand`, `rock`, `grass`, `farmland` | `landcover:wood`, `:ice`, `:wetland`… |
+| `parks`    | `park:*` (national parks, nature reserves, protected areas) |
+| `urban`    | `landuse:residential,commercial,industrial,retail`        |
+
+Any layer and class of the [OpenMapTiles schema](https://openmaptiles.org/schema/)
+can be named as `layer:class,class`, or `layer:*` for all of it. Only the
+layers asked for are downloaded and cached, each on its own, so asking for
+forests after water fetches the tiles once more, and only their `landcover`.
+GeoJSON features carry `layer` and `class`.
+
+**Depth and height bands.** Terrain tiles give heights, the sea floor below
+zero. They are fetched only by `fetch_elevation`; then `split` cuts every area
+at the levels given, and the bands are areas like any other:
+
+```python
+sea = watermask.fetch(vineyard, width=1200, select="ocean")
+terrain = watermask.fetch_elevation(vineyard, width=1200)
+zones = sea.split(terrain, [-30, -20, -10, -5])   # metres, depths negative
+zones.areas            # [AreaInfo(layer='water', cls='ocean', low=None, high=-30.0), …]
+deep = zones.within(high=-20).mask(vineyard, 1200)     # deeper than 20 m
+zones.geojson()        # properties: layer, class, min, max (null at the open ends)
+terrain.grid(vineyard, 1200)                       # (1000, 1200) float32 metres
+```
+
+Each area is joined into one polygon, cut to the extent of the terrain tiles,
+then into bands: below the lowest level, between each pair, above the
+highest. The bands come from contours of the terrain (marching squares, closed
+at the edge of the tiles) and are intersected with the area, so together they
+cover it exactly and do not overlap. Where the terrain puts sea above sea
+level, as it can near a shore, those bits fall in the highest band.
+
+The terrain is [Terrain Tiles](https://registry.opendata.aws/terrain-tiles/)
+on AWS Open Data (Terrarium PNG, no key, CORS open), from many sources: see
+[their attribution](https://github.com/tilezen/joerd/blob/master/docs/attribution.md).
+By default the zoom stops at 10 (about 150 m per pixel at the equator): from
+11 on, some coasts, much of the US for one, come from land surveys that
+flatten the sea to 0 m, and the sea floor has no more detail deeper anyway.
+For detailed land heights pass `max_zoom` up to 15.
+
 ## Why
 
 Deriving water from elevation (everything at or below 0 m) misses lakes and
@@ -53,7 +122,7 @@ OpenStreetMap, free with no key and no request limits. Any source in that
 schema works (MapTiler, a self-hosted copy of OpenFreeMap's planet file): pass
 its TileJSON URL or a `{z}/{x}/{y}` URL template.
 
-Two layers are read:
+For water, two layers are read:
 
 | layer      | kind     | classes (default in **bold**)                                         |
 |------------|----------|-----------------------------------------------------------------------|
@@ -78,8 +147,8 @@ tiles are simplified and small features dropped, in step with the pixel size.
 1. **Zoom.** The shallowest zoom whose tiles (drawn 256 px wide) have pixels
    no larger than the output's, capped at the source's deepest zoom, then
    lowered while the area needs more than `max_tiles` tiles (default 256).
-2. **Tiles.** Fetched in parallel and cached on disk, only their water layers
-   (a fifth of the bytes or less). The cache is `$WATERMASK_CACHE`, or else
+2. **Tiles.** Fetched in parallel and cached on disk, only the layers asked
+   for, one file each (for water, a fifth of the bytes or less). The cache is `$WATERMASK_CACHE`, or else
    `~/Library/Caches/watermask` on macOS, `%LOCALAPPDATA%\watermask` on
    Windows, `~/.cache/watermask` on Linux. A cached tile is used for 30 days,
    across OpenFreeMap's weekly builds, then downloaded again; when offline,
@@ -87,20 +156,25 @@ tiles are simplified and small features dropped, in step with the pixel size.
    deleted, checked once a day. The TileJSON is read each run, since
    OpenFreeMap's tile URLs change with every build, and the last good copy is
    used when offline.
-3. **Decoding.** A small protobuf reader pulls the two layers out of each tile
+3. **Decoding.** A small protobuf reader pulls the layers out of each tile
    and cuts every feature to its own tile, so the buffer tiles share with
-   their neighbours is not counted twice.
+   their neighbours is not counted twice. Land is each tile's square less
+   its sea; a tile with nothing in it is all land, since tile sources leave
+   empty tiles out and the sea is always something.
 4. **Mask.** Polygons are filled with the nonzero winding rule, so the many
    pieces of one sea join without seams and islands stay holes. Each pixel
    gets its exact covered fraction along the row and four sub-rows down it.
 5. **Shoreline.** Marching squares at coverage ½, joined into polylines with
    water on the left.
 6. **Distance.** An exact Euclidean distance transform, signed.
-7. **Polygons.** For GeoJSON, the pieces of each class are joined with a
+7. **Polygons.** For GeoJSON, the pieces of each layer and class are joined with a
    polygon union ([i_overlay](https://github.com/iShape-Rust/iOverlay)),
    same nonzero rule as the mask, so the polygons cover what the mask covers.
    The output is OGC-valid (shapely and GEOS take it as is), exteriors
    counter-clockwise and holes clockwise, and can be cut to a box.
+8. **Bands.** On request only: terrain tiles are decoded into one height
+   field, contoured at each level, and the contours intersected with the
+   joined areas (see [Beyond water](#beyond-water)).
 
 Masks are on a north-up Web Mercator grid. In Rust, `Water::mask_with` takes
 any projection instead.
@@ -109,8 +183,11 @@ any projection instead.
 
 ```toml
 [dependencies]
-watermask = "0.2"          # default-features = false drops the HTTP client
+watermask = "0.3"          # default-features = false drops the HTTP client and terrain
 ```
+
+Features: `fetch` (download and cache tiles) and `dem` (terrain, elevation
+bands), both on by default.
 
 ```rust
 use watermask::{Fetcher, Filter, GeoJsonOptions, Grid, MaskOptions, ZoomLimits};
@@ -129,7 +206,17 @@ let tm = water.mask_with(800, 600, &MaskOptions::default(), |lon, lat| my_projec
 
 // Polygons: joined per class and cut to the box (Water::merged gives the same as structs).
 let json = water.to_geojson(&GeoJsonOptions { bounds: Some(bounds), ..Default::default() });
+
+// Other layers, and depth bands from terrain fetched only here.
+let fetcher = Fetcher::new();
+let woods = fetcher.water_for(&grid, &Filter::parse(&["forest", "parks"])?, &ZoomLimits::default(), |_, _| {})?;
+let sea = water.subset(&Filter::parse(&["ocean"])?);
+let terrain = fetcher.elevation_for(&grid, &ZoomLimits::default(), |_, _| {})?;
+let zones = sea.split(&terrain, &[-30.0, -20.0, -10.0, -5.0])?;   // Area::elevation holds each band
+let deep = zones.within(f64::NEG_INFINITY, -20.0).mask(&grid, &MaskOptions::default());
 ```
+
+`Water` is now an alias of `Features`, which holds whatever was selected.
 
 Without the `fetch` feature, bring tiles from anywhere:
 
@@ -149,11 +236,12 @@ draws the mask, shoreline and waterways of an area.
 pip install watermask
 ```
 
-The example at the top covers most uses. Also:
+The examples above cover most uses. Also:
 `watermask.fetch(bounds, width, areas=["ocean"], lines=[], source=..., log=print)`,
 `water.lines(bounds, width)` for waterway centre lines as `(class, (n, 2) array)`,
 `water.mask(..., line_width=1.5)` to burn them into the mask,
-`Water().add_tile(z, x, y, data)` for your own tiles,
+`Water().add_tile(z, x, y, data, select=...)` and `Elevation().add_tile(z, x, y, png)`
+for your own tiles, `terrain.at(lon, lat)`, `watermask.PRESETS`,
 `zoom_for(bounds, width)` and `tiles_for(bounds, zoom)`.
 
 `water.geojson(bounds=vineyard)` cuts the polygons and lines to the box;
@@ -183,6 +271,13 @@ mask.coverage()                 // Float32Array, row 0 at the top
 const [pts, ends] = mask.outlines()   // x,y pairs; ends[i] = end of line i, in points
 mask.distance()                 // Float32Array
 water.geojson({ bounds: vineyard })   // string; also { pieces: true }
+
+const green = wm.fetch(vineyard, { width: 1200, select: ['forest', 'parks'] })
+const sea = water.subset(['ocean'])
+const terrain = wm.fetchElevation(vineyard, { width: 1200 })   // maxZoom: up to 15 for land
+const zones = sea.split(terrain, [-30, -20, -10, -5])
+zones.areas()                   // [{ layer, class, low, high }, …]
+zones.within(undefined, -20).mask(vineyard, 1200)   // deeper than 20 m
 ```
 
 ## Browser (WebAssembly)
@@ -211,6 +306,11 @@ const mask = water.mask(w, s, e, n, 1200)
 const json = water.geojson(false, [w, s, e, n])      // pieces?, bounds?
 ```
 
+Other layers: `Water.select(['forest', 'land'])` instead of `new Water()`.
+Terrain: the same loop over `tilesFor(w, s, e, n, zoomFor(w, s, e, n, 1200, 256, terrariumZoom()))`
+with `tileUrl(terrarium(), …)` into `new Elevation()`'s `addTile`, then
+`water.split(elevation, [-30, -20, -10])`.
+
 `demo/index.html` does this on a canvas: build the package into `demo/pkg`
 (below), then serve the folder (`python3 -m http.server -d demo`).
 
@@ -233,6 +333,13 @@ wasm-pack build crates/watermask-wasm --release --target web --out-dir ../../dem
 - Water covered by something else (`covered=yes`) is not in the tiles.
 - Across the 180° meridian, tiles are fetched correctly; GeoJSON longitudes
   on the far side run past 180.
+- Landcover and parks at low zooms are generalised by OpenMapTiles much more
+  than water; at a few kilometres per pixel small woods drop out.
+- The `boundary` layer holds lines only, so countries and regions are not
+  areas here.
+- Elevation bands are only as good as the terrain: the sea floor is about a
+  kilometre per sample offshore, and terrain tiles of one zoom are read at a
+  time.
 
 ## License
 

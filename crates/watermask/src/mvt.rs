@@ -1,35 +1,18 @@
-//! Just enough of the Mapbox Vector Tile format (protobuf) to pull water out
-//! of the OpenMapTiles `water` and `waterway` layers. Geometry stays in tile
-//! units, cut to the tile square so the buffer shared with neighbours is not
-//! counted twice.
+//! Just enough of the Mapbox Vector Tile format (protobuf) to pull areas and
+//! lines out of chosen layers. Geometry stays in tile units, cut to the tile
+//! square so the buffer shared with neighbours is not counted twice.
 
 use std::borrow::Cow;
 use std::io::Read;
 
-use crate::Filter;
-
-const WATER: &str = "water";
-const WATERWAY: &str = "waterway";
-
-pub struct RawRing {
-    pub exterior: bool,
-    pub points: Vec<[f64; 2]>,
-}
-
-pub struct RawArea {
-    pub class: String,
-    pub rings: Vec<RawRing>,
-}
-
-pub struct RawLine {
-    pub class: String,
-    pub points: Vec<[f64; 2]>,
-}
+use crate::{Area, Filter, Line, Ring};
 
 /// Geometry in tile units: 0..1 across, y down.
-pub struct TileWater {
-    pub areas: Vec<RawArea>,
-    pub lines: Vec<RawLine>,
+pub struct TileFeatures {
+    pub areas: Vec<Area>,
+    pub lines: Vec<Line>,
+    /// The sea (`water`, class `ocean`), whatever the filter, when it asks for land.
+    pub sea: Vec<Ring>,
 }
 
 fn gunzip(bytes: &[u8]) -> Result<Cow<'_, [u8]>, String> {
@@ -41,25 +24,29 @@ fn gunzip(bytes: &[u8]) -> Result<Cow<'_, [u8]>, String> {
     Ok(Cow::Owned(v))
 }
 
-/// The tile with only its `water` and `waterway` layers, uncompressed; empty
-/// when it has neither. Every feature is kept, so any [`Filter`] still applies.
+/// Each named layer of the tile on its own, uncompressed and framed as a
+/// tile: empty where the tile lacks it. Tiles concatenate, so the parts can be
+/// stored apart and joined again. Every feature is kept, so any [`Filter`]
+/// on those layers still applies.
 #[cfg(feature = "fetch")]
-pub fn water_layers(bytes: &[u8]) -> Result<Vec<u8>, String> {
+pub fn split_layers(bytes: &[u8], names: &[String]) -> Result<Vec<Vec<u8>>, String> {
     let bytes = gunzip(bytes)?;
-    let mut out = Vec::new();
+    let mut out = vec![Vec::new(); names.len()];
     let mut r = Pbf::new(&bytes);
     while let Some((field, wire)) = r.key()? {
         if field == 3 && wire == 2 {
             let layer = r.bytes()?;
-            if matches!(layer_name(layer)?.as_str(), WATER | WATERWAY) {
-                out.push(3 << 3 | 2);
+            let name = layer_name(layer)?;
+            if let Some(i) = names.iter().position(|n| *n == name) {
+                let o = &mut out[i];
+                o.push(3 << 3 | 2);
                 let mut n = layer.len() as u64;
                 while n >= 0x80 {
-                    out.push(n as u8 | 0x80);
+                    o.push(n as u8 | 0x80);
                     n >>= 7;
                 }
-                out.push(n as u8);
-                out.extend_from_slice(layer);
+                o.push(n as u8);
+                o.extend_from_slice(layer);
             }
         } else {
             r.skip(wire)?;
@@ -80,9 +67,9 @@ fn layer_name(buf: &[u8]) -> Result<String, String> {
     Ok(String::new())
 }
 
-pub fn read_water(bytes: &[u8], filter: &Filter) -> Result<TileWater, String> {
+pub fn read(bytes: &[u8], filter: &Filter) -> Result<TileFeatures, String> {
     let bytes = gunzip(bytes)?;
-    let mut out = TileWater { areas: Vec::new(), lines: Vec::new() };
+    let mut out = TileFeatures { areas: Vec::new(), lines: Vec::new(), sea: Vec::new() };
     let mut r = Pbf::new(&bytes);
     while let Some((field, wire)) = r.key()? {
         if field == 3 && wire == 2 {
@@ -111,7 +98,7 @@ impl Value {
     }
 }
 
-fn read_layer(buf: &[u8], filter: &Filter, out: &mut TileWater) -> Result<(), String> {
+fn read_layer(buf: &[u8], filter: &Filter, out: &mut TileFeatures) -> Result<(), String> {
     // Fields can come in any order: collect, then interpret.
     let mut name = String::new();
     let mut features: Vec<&[u8]> = Vec::new();
@@ -129,11 +116,10 @@ fn read_layer(buf: &[u8], filter: &Filter, out: &mut TileWater) -> Result<(), St
             _ => r.skip(wire)?,
         }
     }
-    let lines = match name.as_str() {
-        WATER => false,
-        WATERWAY => true,
-        _ => return Ok(()),
-    };
+    let land = filter.land() && name == "water";
+    if !land && !filter.rules.iter().any(|r| r.layer == name) {
+        return Ok(());
+    }
     let extent = extent.max(1) as f64;
     let unit = |pts: Vec<[f64; 2]>| pts.into_iter().map(|p| [p[0] / extent, p[1] / extent]).collect::<Vec<_>>();
     for f in features {
@@ -149,35 +135,35 @@ fn read_layer(buf: &[u8], filter: &Filter, out: &mut TileWater) -> Result<(), St
                 _ => {}
             }
         }
-        if (intermittent && !filter.intermittent) || (tunnel && !filter.tunnels) {
-            continue;
-        }
-        if lines {
-            if kind != 2 || !filter.lines.contains(&class) {
-                continue;
-            }
-            for part in decode(&geom)? {
-                for piece in clip_line(&part, [0.0, 0.0, extent, extent]) {
-                    out.lines.push(RawLine { class: class.clone(), points: unit(piece) });
+        let sea = land && kind == 3 && class == "ocean";
+        let keep = filter.matches(&name, &class) && !(intermittent && !filter.intermittent) && !(tunnel && !filter.tunnels);
+        match kind {
+            2 if keep => {
+                for part in decode(&geom)? {
+                    for piece in clip_line(&part, [0.0, 0.0, extent, extent]) {
+                        out.lines.push(Line { layer: name.clone(), class: class.clone(), points: unit(piece) });
+                    }
                 }
             }
-        } else {
-            if kind != 3 || !filter.areas.contains(&class) {
-                continue;
+            3 if keep || sea => {
+                let rings: Vec<Ring> = decode(&geom)?
+                    .into_iter()
+                    .filter_map(|ring| {
+                        // The format marks exteriors by winding: positive area in
+                        // tile coordinates (y down).
+                        let exterior = area(&ring) > 0.0;
+                        let points = clip_ring(&ring, extent);
+                        (points.len() >= 3 && area(&points).abs() > 1e-9).then(|| Ring { exterior, points: unit(points) })
+                    })
+                    .collect();
+                if sea {
+                    out.sea.extend(rings.iter().cloned());
+                }
+                if keep && !rings.is_empty() {
+                    out.areas.push(Area { layer: name.clone(), class, rings, elevation: None });
+                }
             }
-            let rings: Vec<RawRing> = decode(&geom)?
-                .into_iter()
-                .filter_map(|ring| {
-                    // The format marks exteriors by winding: positive area in
-                    // tile coordinates (y down).
-                    let exterior = area(&ring) > 0.0;
-                    let points = clip_ring(&ring, extent);
-                    (points.len() >= 3 && area(&points).abs() > 1e-9).then(|| RawRing { exterior, points: unit(points) })
-                })
-                .collect();
-            if !rings.is_empty() {
-                out.areas.push(RawArea { class, rings });
-            }
+            _ => {}
         }
     }
     Ok(())
@@ -466,16 +452,19 @@ mod tests {
 
     #[test]
     #[cfg(feature = "fetch")]
-    fn water_layers_decode_like_the_whole_tile() {
+    fn split_layers_decode_like_the_whole_tile() {
         let full = include_bytes!("../tests/fixtures/12-1244-1528.pbf");
-        let slim = water_layers(full).unwrap();
-        assert!(slim.len() < full.len() / 2, "{} of {}", slim.len(), full.len());
-        let all = Filter { areas: vec!["ocean".into(), "lake".into(), "pond".into()], lines: vec!["stream".into()], ..Filter::default() };
-        let (a, b) = (read_water(full, &all).unwrap(), read_water(&slim, &all).unwrap());
-        let pts = |w: &TileWater| w.areas.iter().flat_map(|a| &a.rings).map(|r| r.points.len()).sum::<usize>();
-        assert_eq!((a.areas.len(), a.lines.len(), pts(&a)), (b.areas.len(), b.lines.len(), pts(&b)));
-        assert!(pts(&a) > 0);
-        assert!(water_layers(&[]).unwrap().is_empty());
+        let all = Filter::parse(&["water:ocean,lake,pond", "waterway:stream", "landcover:*", "land"]).unwrap();
+        let names = all.layers();
+        assert_eq!(names, ["water", "waterway", "landcover"]);
+        let parts = split_layers(full, &names).unwrap();
+        let slim = parts.concat();
+        assert!(parts[..2].concat().len() < full.len() / 2, "{} of {}", slim.len(), full.len());
+        let (a, b) = (read(full, &all).unwrap(), read(&slim, &all).unwrap());
+        let pts = |w: &TileFeatures| w.areas.iter().flat_map(|a| &a.rings).map(|r| r.points.len()).sum::<usize>();
+        assert_eq!((a.areas.len(), a.lines.len(), a.sea.len(), pts(&a)), (b.areas.len(), b.lines.len(), b.sea.len(), pts(&b)));
+        assert!(pts(&a) > 0 && !a.sea.is_empty());
+        assert!(split_layers(&[], &names).unwrap().iter().all(|p| p.is_empty()));
     }
 
     #[test]

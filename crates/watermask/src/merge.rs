@@ -13,13 +13,15 @@ use i_overlay::float::overlay::{FloatOverlay, OverlayOptions};
 use crate::mvt::clip_line;
 use crate::{Area, Line, Ring};
 
-fn signed_area(pts: &[[f64; 2]]) -> f64 {
+pub(crate) type Path = Vec<[f64; 2]>;
+
+pub(crate) fn signed_area(pts: &[[f64; 2]]) -> f64 {
     let n = pts.len();
     (0..n).map(|i| pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1]).sum::<f64>() / 2.0
 }
 
 /// Exteriors counter-clockwise, holes clockwise (y up), without the closing point.
-fn oriented(r: &Ring) -> Vec<[f64; 2]> {
+fn oriented(r: &Ring) -> Path {
     let mut pts = r.points.clone();
     if pts.len() > 1 && pts.first() == pts.last() {
         pts.pop();
@@ -30,39 +32,55 @@ fn oriented(r: &Ring) -> Vec<[f64; 2]> {
     pts
 }
 
-/// Areas of the same class as one area each when `merge`, else one per piece;
-/// cut to `clip` (Mercator xmin, ymin, xmax, ymax) when given.
+/// Rings as paths for [`overlay`], wound so the nonzero rule fills the area.
+pub(crate) fn paths<'a>(rings: impl IntoIterator<Item = &'a Ring>) -> Vec<Path> {
+    rings.into_iter().map(oriented).filter(|r| r.len() >= 3).collect()
+}
+
+pub(crate) fn rect([x0, y0, x1, y1]: [f64; 4]) -> Vec<Path> {
+    vec![vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]]
+}
+
+/// A boolean operation under the nonzero rule. The output is OGC-valid (no
+/// ring touches itself, so GEOS/shapely accept it), each exterior followed
+/// by its holes.
+pub(crate) fn overlay(subj: &[Path], clip: &[Path], rule: OverlayRule) -> Vec<Ring> {
+    if subj.is_empty() || (clip.is_empty() && rule == OverlayRule::Intersect) {
+        return Vec::new();
+    }
+    let (ogc, solver) = (OverlayOptions::ogc(), Solver::default());
+    let shapes = if clip.is_empty() {
+        FloatOverlay::with_subj_custom(subj, ogc, solver).overlay(OverlayRule::Subject, FillRule::NonZero)
+    } else {
+        FloatOverlay::with_subj_and_clip_custom(subj, clip, ogc, solver).overlay(rule, FillRule::NonZero)
+    };
+    shapes.into_iter().flat_map(|shape| shape.into_iter().enumerate().map(|(i, points)| Ring { exterior: i == 0, points })).collect()
+}
+
+/// Areas of the same layer, class and elevation band as one area each when
+/// `merge`, else one per piece; cut to `clip` (Mercator xmin, ymin, xmax,
+/// ymax) when given.
 pub fn areas(areas: &[Area], merge: bool, clip: Option<[f64; 4]>) -> Vec<Area> {
-    let mut groups: Vec<(&str, Vec<&Area>)> = Vec::new();
+    let mut groups: Vec<(&Area, Vec<&Area>)> = Vec::new();
     for a in areas {
-        match groups.iter_mut().find(|(c, _)| merge && *c == a.class) {
+        match groups.iter_mut().find(|(g, _)| merge && g.layer == a.layer && g.class == a.class && g.elevation == a.elevation) {
             Some((_, list)) => list.push(a),
-            None => groups.push((&a.class, vec![a])),
+            None => groups.push((a, vec![a])),
         }
     }
     groups
         .into_iter()
-        .filter_map(|(class, list)| {
-            let subj: Vec<Vec<[f64; 2]>> = list.iter().flat_map(|a| &a.rings).map(oriented).filter(|r| r.len() >= 3).collect();
+        .filter_map(|(first, list)| {
             let rings: Vec<Ring> = if !merge && clip.is_none() {
                 list.iter().flat_map(|a| &a.rings).map(|r| Ring { exterior: r.exterior, points: oriented(r) }).collect()
             } else {
-                // OGC-valid: no ring touches itself, so GEOS/shapely accept the output.
-                let (ogc, solver) = (OverlayOptions::ogc(), Solver::default());
-                let shapes = match clip {
-                    Some([x0, y0, x1, y1]) => {
-                        let rect = vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
-                        FloatOverlay::with_subj_and_clip_custom(&subj, &rect, ogc, solver)
-                            .overlay(OverlayRule::Intersect, FillRule::NonZero)
-                    }
-                    None => FloatOverlay::with_subj_custom(&subj, ogc, solver).overlay(OverlayRule::Subject, FillRule::NonZero),
-                };
-                shapes
-                    .into_iter()
-                    .flat_map(|shape| shape.into_iter().enumerate().map(|(i, points)| Ring { exterior: i == 0, points }))
-                    .collect()
+                let subj = paths(list.iter().flat_map(|a| &a.rings));
+                match clip {
+                    Some(c) => overlay(&subj, &rect(c), OverlayRule::Intersect),
+                    None => overlay(&subj, &[], OverlayRule::Subject),
+                }
             };
-            (!rings.is_empty()).then(|| Area { class: class.to_string(), rings })
+            (!rings.is_empty()).then(|| Area { rings, ..first.without_rings() })
         })
         .collect()
 }
@@ -70,9 +88,10 @@ pub fn areas(areas: &[Area], merge: bool, clip: Option<[f64; 4]>) -> Vec<Area> {
 pub fn lines(lines: &[Line], clip: Option<[f64; 4]>) -> Vec<Line> {
     match clip {
         None => lines.to_vec(),
-        Some(r) => {
-            lines.iter().flat_map(|l| clip_line(&l.points, r).into_iter().map(|points| Line { class: l.class.clone(), points })).collect()
-        }
+        Some(r) => lines
+            .iter()
+            .flat_map(|l| clip_line(&l.points, r).into_iter().map(|points| Line { layer: l.layer.clone(), class: l.class.clone(), points }))
+            .collect(),
     }
 }
 
@@ -85,7 +104,7 @@ mod tests {
     }
 
     fn area(class: &str, rings: Vec<Ring>) -> Area {
-        Area { class: class.into(), rings }
+        Area { layer: "water".into(), class: class.into(), rings, elevation: None }
     }
 
     #[test]
@@ -117,7 +136,7 @@ mod tests {
         let out = areas(std::slice::from_ref(&lake), true, Some([5.0, -5.0, 15.0, 5.0]));
         assert!((signed_area(&out[0].rings[0].points) - 25.0).abs() < 1e-6);
         assert!(areas(&[lake], true, Some([20.0, 20.0, 30.0, 30.0])).is_empty());
-        let l = Line { class: "river".into(), points: vec![[0.0, 0.0], [10.0, 0.0]] };
+        let l = Line { layer: "waterway".into(), class: "river".into(), points: vec![[0.0, 0.0], [10.0, 0.0]] };
         assert_eq!(lines(&[l], Some([5.0, -1.0, 20.0, 1.0]))[0].points, vec![[5.0, 0.0], [10.0, 0.0]]);
     }
 

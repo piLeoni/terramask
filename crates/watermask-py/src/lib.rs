@@ -32,9 +32,47 @@ fn grid(bounds: Bounds, width: usize, height: Option<usize>) -> PyResult<waterma
     })
 }
 
-fn filter(areas: Option<Vec<String>>, lines: Option<Vec<String>>, intermittent: bool, tunnels: bool) -> watermask::Filter {
-    let d = watermask::Filter::default();
-    watermask::Filter { areas: areas.unwrap_or(d.areas), lines: lines.unwrap_or(d.lines), intermittent, tunnels }
+/// `select` (presets and layer:class rules), or else water of `areas` and `lines`.
+fn filter(
+    select: Option<Vec<String>>,
+    areas: Option<Vec<String>>,
+    lines: Option<Vec<String>>,
+    intermittent: bool,
+    tunnels: bool,
+) -> PyResult<watermask::Filter> {
+    let f = match select {
+        Some(s) if areas.is_none() && lines.is_none() => watermask::Filter::parse(&s).map_err(py_err)?,
+        Some(_) => return Err(PyValueError::new_err("give select, or areas and lines, not both")),
+        None => watermask::Filter::water(
+            &areas.unwrap_or_else(|| watermask::Filter::DEFAULT_AREAS.iter().map(|s| s.to_string()).collect()),
+            &lines.unwrap_or_else(|| watermask::Filter::DEFAULT_LINES.iter().map(|s| s.to_string()).collect()),
+        ),
+    };
+    Ok(watermask::Filter { intermittent, tunnels, ..f })
+}
+
+fn fetcher(source: Option<String>, cache: Option<PathBuf>, no_cache: bool) -> watermask::Fetcher {
+    let mut f = watermask::Fetcher::new();
+    if let Some(c) = cache {
+        f.cache = Some(c);
+    }
+    if no_cache {
+        f.cache = None;
+    }
+    if let Some(s) = source {
+        f.source = s;
+    }
+    f
+}
+
+fn progress(log: &Option<Py<PyAny>>) -> impl Fn(usize, usize) + Sync + '_ {
+    move |done: usize, total: usize| {
+        if let Some(cb) = log {
+            Python::attach(|py| {
+                let _ = cb.call1(py, (done, total));
+            });
+        }
+    }
 }
 
 fn f32s<'py>(py: Python<'py>, v: &[f32]) -> Bound<'py, PyBytes> {
@@ -100,7 +138,7 @@ impl Water {
         Self::default()
     }
 
-    #[pyo3(signature = (z, x, y, data, areas=None, lines=None, intermittent=false, tunnels=false))]
+    #[pyo3(signature = (z, x, y, data, select=None, areas=None, lines=None, intermittent=false, tunnels=false))]
     #[allow(clippy::too_many_arguments)]
     fn add_tile(
         &mut self,
@@ -108,13 +146,35 @@ impl Water {
         x: u32,
         y: u32,
         data: &[u8],
+        select: Option<Vec<String>>,
         areas: Option<Vec<String>>,
         lines: Option<Vec<String>>,
         intermittent: bool,
         tunnels: bool,
     ) -> PyResult<()> {
-        let f = filter(areas, lines, intermittent, tunnels);
+        let f = filter(select, areas, lines, intermittent, tunnels)?;
         self.inner.add_tile(watermask::TileId::new(z, x, y), data, &f).map_err(py_err)
+    }
+
+    fn subset(&self, select: Vec<String>) -> PyResult<Water> {
+        let f = watermask::Filter::parse(&select).map_err(py_err)?;
+        Ok(Water { inner: self.inner.subset(&f) })
+    }
+
+    fn within(&self, low: f64, high: f64) -> Water {
+        Water { inner: self.inner.within(low, high) }
+    }
+
+    fn split(&self, py: Python<'_>, elevation: &Elevation, levels: Vec<f64>) -> PyResult<Water> {
+        let inner = py.detach(|| self.inner.split(&elevation.inner, &levels)).map_err(py_err)?;
+        Ok(Water { inner })
+    }
+
+    /// (layer, class, low, high) of each area; low and high are None until
+    /// split, and at the open ends of the bands.
+    fn area_info(&self) -> Vec<(String, String, Option<f64>, Option<f64>)> {
+        let end = |a: &watermask::Area, i: usize| a.elevation.map(|e| e[i]).filter(|v| v.is_finite());
+        self.inner.areas.iter().map(|a| (a.layer.clone(), a.class.clone(), end(a, 0), end(a, 1))).collect()
     }
 
     #[pyo3(signature = (bounds, width, height=None, supersample=4, line_width=0.0))]
@@ -163,6 +223,80 @@ impl Water {
     }
 }
 
+/// Terrain heights from elevation tiles.
+#[pyclass(module = "watermask._watermask")]
+#[derive(Default)]
+struct Elevation {
+    inner: watermask::Elevation,
+}
+
+#[pymethods]
+impl Elevation {
+    #[new]
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// A Terrarium PNG.
+    fn add_tile(&mut self, z: u8, x: u32, y: u32, data: &[u8]) -> PyResult<()> {
+        self.inner.add_tile(watermask::TileId::new(z, x, y), data).map_err(py_err)
+    }
+
+    #[pyo3(signature = (bounds, width, height=None))]
+    fn grid<'py>(&self, py: Python<'py>, bounds: Bounds, width: usize, height: Option<usize>) -> PyResult<(Bound<'py, PyBytes>, usize)> {
+        let g = grid(bounds, width, height)?;
+        let h = py.detach(|| self.inner.on(&g));
+        Ok((f32s(py, &h), g.height))
+    }
+
+    fn at(&self, lon: f64, lat: f64) -> f32 {
+        self.inner.at(lon, lat)
+    }
+
+    #[getter]
+    fn tile_count(&self) -> usize {
+        self.inner.tile_count()
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (bounds, width=None, height=None, zoom=None, max_zoom=None, source=None, cache=None, no_cache=false,
+                    max_tiles=256, log=None))]
+#[allow(clippy::too_many_arguments)]
+fn fetch_elevation(
+    py: Python<'_>,
+    bounds: Bounds,
+    width: Option<usize>,
+    height: Option<usize>,
+    zoom: Option<u8>,
+    max_zoom: Option<u8>,
+    source: Option<String>,
+    cache: Option<PathBuf>,
+    no_cache: bool,
+    max_tiles: usize,
+    log: Option<Py<PyAny>>,
+) -> PyResult<Elevation> {
+    let mut f = fetcher(None, cache, no_cache);
+    if let Some(s) = source {
+        f.elevation_source = s;
+    }
+    if let Some(z) = max_zoom {
+        f.elevation_max_zoom = z;
+    }
+    let progress = progress(&log);
+    let inner = match (zoom, width) {
+        (Some(z), _) => py.detach(|| f.elevation(arr(bounds), z, progress)),
+        (None, Some(w)) => {
+            let g = grid(bounds, w, height)?;
+            let limits = watermask::ZoomLimits { max_tiles, ..Default::default() };
+            py.detach(|| f.elevation_for(&g, &limits, progress))
+        }
+        (None, None) => return Err(PyValueError::new_err("give the output width (or a tile zoom)")),
+    }
+    .map_err(py_err)?;
+    Ok(Elevation { inner })
+}
+
 #[pyfunction]
 #[pyo3(signature = (bounds, width, max_tiles=256, max_zoom=watermask::MAX_ZOOM))]
 fn zoom_for(bounds: Bounds, width: usize, max_tiles: usize, max_zoom: u8) -> u8 {
@@ -176,8 +310,8 @@ fn tiles_for(bounds: Bounds, zoom: u8) -> Vec<(u8, u32, u32)> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (bounds, width=None, height=None, zoom=None, areas=None, lines=None, intermittent=false, tunnels=false,
-                    source=None, cache=None, no_cache=false, max_tiles=256, log=None))]
+#[pyo3(signature = (bounds, width=None, height=None, zoom=None, select=None, areas=None, lines=None, intermittent=false,
+                    tunnels=false, source=None, cache=None, no_cache=false, max_tiles=256, log=None))]
 #[allow(clippy::too_many_arguments)]
 fn fetch(
     py: Python<'_>,
@@ -185,6 +319,7 @@ fn fetch(
     width: Option<usize>,
     height: Option<usize>,
     zoom: Option<u8>,
+    select: Option<Vec<String>>,
     areas: Option<Vec<String>>,
     lines: Option<Vec<String>>,
     intermittent: bool,
@@ -195,24 +330,9 @@ fn fetch(
     max_tiles: usize,
     log: Option<Py<PyAny>>,
 ) -> PyResult<Water> {
-    let mut fetcher = watermask::Fetcher::new();
-    if let Some(s) = source {
-        fetcher.source = s;
-    }
-    if let Some(c) = cache {
-        fetcher.cache = Some(c);
-    }
-    if no_cache {
-        fetcher.cache = None;
-    }
-    let f = filter(areas, lines, intermittent, tunnels);
-    let progress = |done: usize, total: usize| {
-        if let Some(cb) = &log {
-            Python::attach(|py| {
-                let _ = cb.call1(py, (done, total));
-            });
-        }
-    };
+    let fetcher = fetcher(source, cache, no_cache);
+    let f = filter(select, areas, lines, intermittent, tunnels)?;
+    let progress = progress(&log);
     let inner = match (zoom, width) {
         (Some(z), _) => py.detach(|| fetcher.water(arr(bounds), z, &f, progress)),
         (None, Some(w)) => {
@@ -231,13 +351,18 @@ fn _watermask(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("OPENFREEMAP", watermask::OPENFREEMAP)?;
     m.add("MAX_ZOOM", watermask::MAX_ZOOM)?;
-    let d = watermask::Filter::default();
-    m.add("DEFAULT_AREAS", d.areas)?;
-    m.add("DEFAULT_LINES", d.lines)?;
+    m.add("TERRARIUM", watermask::TERRARIUM)?;
+    m.add("TERRARIUM_ZOOM", watermask::TERRARIUM_ZOOM)?;
+    m.add("TERRARIUM_MAX_ZOOM", watermask::TERRARIUM_MAX_ZOOM)?;
+    m.add("DEFAULT_AREAS", watermask::Filter::DEFAULT_AREAS.to_vec())?;
+    m.add("DEFAULT_LINES", watermask::Filter::DEFAULT_LINES.to_vec())?;
+    m.add("PRESETS", watermask::PRESETS.to_vec())?;
     m.add_class::<Water>()?;
     m.add_class::<Mask>()?;
+    m.add_class::<Elevation>()?;
     m.add_function(wrap_pyfunction!(zoom_for, m)?)?;
     m.add_function(wrap_pyfunction!(tiles_for, m)?)?;
     m.add_function(wrap_pyfunction!(fetch, m)?)?;
+    m.add_function(wrap_pyfunction!(fetch_elevation, m)?)?;
     Ok(())
 }

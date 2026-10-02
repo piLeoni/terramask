@@ -9,6 +9,20 @@
  */
 export declare const __napiBindingTarget: 'native' | 'wasm32-wasi' | 'wasm32-wasip1'
 
+/** Terrain heights in metres (sea floor negative) from elevation tiles. */
+export declare class Elevation {
+  constructor()
+  /** Read one Terrarium PNG. Tiles must share one zoom. */
+  addTile(z: number, x: number, y: number, data: Uint8Array): void
+  /**
+   * Metres at the pixel centres of the grid, row 0 at the top; NaN
+   * outside the tiles.
+   */
+  grid(bounds: Array<number>, width: number, height?: number | undefined | null): Float32Array
+  at(lon: number, lat: number): number
+  get tileCount(): number
+}
+
 /** Water coverage of a grid. */
 export declare class Mask {
   get width(): number
@@ -29,6 +43,16 @@ export declare class Water {
   constructor()
   /** Read one vector tile (raw or gzipped protobuf). */
   addTile(z: number, x: number, y: number, data: Uint8Array, filterOptions?: FilterOptions | undefined | null): void
+  /** The areas and lines matching presets or `layer:class` rules. */
+  subset(select: Array<string>): Water
+  /**
+   * Every area cut into elevation bands at `levels` (metres, depths
+   * negative): below the lowest, between each pair, above the highest.
+   */
+  split(elevation: Elevation, levels: Array<number>): Water
+  /** The bands of a split that lie within `low`..`high` metres. */
+  within(low?: number | undefined | null, high?: number | undefined | null): Water
+  areas(): Array<AreaInfo>
   /**
    * Coverage on a north-up Web Mercator grid; height follows the box's
    * shape when left out.
@@ -46,8 +70,42 @@ export declare class Water {
   get lineCount(): number
 }
 
-/** Download (or read from the cache) the water in a box. Blocks until done. */
+/** Layer, class and elevation band of an area. */
+export interface AreaInfo {
+  layer: string
+  class: string
+  /** Band in metres after `split`; absent before, and at open ends. */
+  low?: number
+  high?: number
+}
+
+export interface ElevationOptions {
+  /** Output width in pixels: picks the tile zoom. */
+  width?: number
+  height?: number
+  /** Tile zoom, instead of width. */
+  zoom?: number
+  /**
+   * Deepest zoom picked from width; default 10, which keeps the sea floor
+   * everywhere (deeper, some coasts flatten the sea to 0 m). Up to 15 for
+   * detailed land heights.
+   */
+  maxZoom?: number
+  /** {z}/{x}/{y} template of Terrarium PNGs; default AWS Open Data. */
+  source?: string
+  cache?: string
+  noCache?: boolean
+  maxTiles?: number
+}
+
+/**
+ * Download (or read from the cache) the water in a box, or what `select`
+ * names. Blocks until done.
+ */
 export declare function fetch(bounds: Array<number>, options?: FetchOptions | undefined | null): Water
+
+/** Download (or read from the cache) terrain for a box. Blocks until done. */
+export declare function fetchElevation(bounds: Array<number>, options?: ElevationOptions | undefined | null): Elevation
 
 export interface FetchOptions {
   /** Output width in pixels: picks the tile zoom. */
@@ -55,6 +113,8 @@ export interface FetchOptions {
   height?: number
   /** Tile zoom, instead of width. */
   zoom?: number
+  /** Presets and `layer:class` rules, instead of areas and lines. */
+  select?: Array<string>
   areas?: Array<string>
   lines?: Array<string>
   intermittent?: boolean
@@ -67,9 +127,14 @@ export interface FetchOptions {
   maxTiles?: number
 }
 
-/** Which features count as water (OpenMapTiles classes). */
+/** Which features to keep: `select`, or else water of `areas` and `lines`. */
 export interface FilterOptions {
-  /** Area classes; default ocean, lake, river, dock. */
+  /**
+   * Presets (water, land, forest, parks…; see `presets()`) and
+   * `layer:class,class` or `layer:*` rules.
+   */
+  select?: Array<string>
+  /** Water area classes; default ocean, lake, river, dock. */
   areas?: Array<string>
   /** Waterway line classes; default river, canal, stream. */
   lines?: Array<string>
@@ -83,6 +148,9 @@ export interface GeoJsonOptions {
   /** Cut everything to [west, south, east, north]. */
   bounds?: Array<number>
 }
+
+/** Preset names and the rules they stand for. */
+export declare function presets(): Record<string, string>
 
 /** Tiles covering the box as [z, x, y] (x may exceed 2^z - 1 across 180°). */
 export declare function tilesFor(bounds: Array<number>, zoom: number): Array<Array<number>>

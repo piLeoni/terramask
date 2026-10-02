@@ -79,17 +79,58 @@ pub struct Water {
 
 #[wasm_bindgen]
 impl Water {
-    /// `areas` / `lines`: OpenMapTiles classes to keep (defaults when left out).
+    /// `areas` / `lines`: water classes to keep (defaults when left out).
+    /// For other layers, see `Water.select`.
     #[wasm_bindgen(constructor)]
     pub fn new(areas: Option<Vec<String>>, lines: Option<Vec<String>>, intermittent: Option<bool>, tunnels: Option<bool>) -> Water {
-        let d = watermask::Filter::default();
-        let filter = watermask::Filter {
-            areas: areas.unwrap_or(d.areas),
-            lines: lines.unwrap_or(d.lines),
-            intermittent: intermittent.unwrap_or(false),
-            tunnels: tunnels.unwrap_or(false),
-        };
+        let owned = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let f = watermask::Filter::water(
+            &areas.unwrap_or_else(|| owned(watermask::Filter::DEFAULT_AREAS)),
+            &lines.unwrap_or_else(|| owned(watermask::Filter::DEFAULT_LINES)),
+        );
+        let filter = watermask::Filter { intermittent: intermittent.unwrap_or(false), tunnels: tunnels.unwrap_or(false), ..f };
         Water { inner: watermask::Water::new(), filter }
+    }
+
+    /// Keep what `items` names: presets (water, land, forest, parks…; see
+    /// `presets()`) and `layer:class,class` or `layer:*` rules.
+    pub fn select(items: Vec<String>, intermittent: Option<bool>, tunnels: Option<bool>) -> Result<Water, JsError> {
+        let f = watermask::Filter::parse(&items).map_err(js_err)?;
+        let filter = watermask::Filter { intermittent: intermittent.unwrap_or(false), tunnels: tunnels.unwrap_or(false), ..f };
+        Ok(Water { inner: watermask::Water::new(), filter })
+    }
+
+    /// The areas and lines matching presets or rules.
+    pub fn subset(&self, items: Vec<String>) -> Result<Water, JsError> {
+        let f = watermask::Filter::parse(&items).map_err(js_err)?;
+        Ok(Water { inner: self.inner.subset(&f), filter: self.filter.clone() })
+    }
+
+    /// Every area cut into elevation bands at `levels` (metres, depths
+    /// negative): below the lowest, between each pair, above the highest.
+    pub fn split(&self, elevation: &Elevation, levels: Vec<f64>) -> Result<Water, JsError> {
+        Ok(Water { inner: self.inner.split(&elevation.inner, &levels).map_err(js_err)?, filter: self.filter.clone() })
+    }
+
+    /// The bands of a split that lie within `low`..`high` metres.
+    pub fn within(&self, low: Option<f64>, high: Option<f64>) -> Water {
+        let inner = self.inner.within(low.unwrap_or(f64::NEG_INFINITY), high.unwrap_or(f64::INFINITY));
+        Water { inner, filter: self.filter.clone() }
+    }
+
+    /// `{ layer, class, low, high }` of each area; low and high are null
+    /// before a split and at the open ends of the bands.
+    pub fn areas(&self) -> js_sys::Array {
+        let out = js_sys::Array::new();
+        for a in &self.inner.areas {
+            let o = js_sys::Object::new();
+            let end = |i: usize| a.elevation.map(|e| e[i]).filter(|v| v.is_finite()).map_or(JsValue::NULL, JsValue::from);
+            for (k, v) in [("layer", JsValue::from(&a.layer)), ("class", JsValue::from(&a.class)), ("low", end(0)), ("high", end(1))] {
+                let _ = js_sys::Reflect::set(&o, &JsValue::from(k), &v);
+            }
+            out.push(&o);
+        }
+        out
     }
 
     /// Read one tile's bytes (raw or gzipped protobuf). Use the unwrapped `x`
@@ -148,6 +189,81 @@ impl Water {
     }
 }
 
+/// Terrain heights in metres (sea floor negative). The page fetches the
+/// tiles (Terrarium PNGs, see `terrarium()`) and hands their bytes here.
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct Elevation {
+    inner: watermask::Elevation,
+}
+
+#[wasm_bindgen]
+impl Elevation {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Elevation {
+        Self::default()
+    }
+
+    /// One Terrarium PNG. Tiles must share one zoom.
+    #[wasm_bindgen(js_name = addTile)]
+    pub fn add_tile(&mut self, z: u8, x: u32, y: u32, data: &[u8]) -> Result<(), JsError> {
+        self.inner.add_tile(watermask::TileId::new(z, x, y), data).map_err(js_err)
+    }
+
+    /// Metres at the pixel centres of the grid, row 0 at the top; NaN
+    /// outside the tiles.
+    #[allow(clippy::too_many_arguments)]
+    pub fn grid(
+        &self,
+        west: f64,
+        south: f64,
+        east: f64,
+        north: f64,
+        width: u32,
+        height: Option<u32>,
+    ) -> Result<js_sys::Float32Array, JsError> {
+        Ok(js_sys::Float32Array::from(&self.inner.on(&grid(west, south, east, north, width, height)?)[..]))
+    }
+
+    pub fn at(&self, lon: f64, lat: f64) -> f32 {
+        self.inner.at(lon, lat)
+    }
+
+    #[wasm_bindgen(getter, js_name = tileCount)]
+    pub fn tile_count(&self) -> u32 {
+        self.inner.tile_count() as u32
+    }
+}
+
+/// `{z}/{x}/{y}` template of the default terrain tiles (AWS Open Data).
+#[wasm_bindgen]
+pub fn terrarium() -> String {
+    watermask::TERRARIUM.to_string()
+}
+
+/// Deepest zoom of the default terrain tiles.
+#[wasm_bindgen(js_name = terrariumMaxZoom)]
+pub fn terrarium_max_zoom() -> u8 {
+    watermask::TERRARIUM_MAX_ZOOM
+}
+
+/// Deepest terrain zoom worth reading for the sea floor: deeper, some
+/// coasts flatten the sea to 0 m. Use it as `maxZoom` in `zoomFor`.
+#[wasm_bindgen(js_name = terrariumZoom)]
+pub fn terrarium_zoom() -> u8 {
+    watermask::TERRARIUM_ZOOM
+}
+
+/// Preset names and the rules they stand for, as an object.
+#[wasm_bindgen]
+pub fn presets() -> js_sys::Object {
+    let o = js_sys::Object::new();
+    for (k, v) in watermask::PRESETS {
+        let _ = js_sys::Reflect::set(&o, &JsValue::from(*k), &JsValue::from(*v));
+    }
+    o
+}
+
 /// Tile zoom with at least the detail of `width` pixels across the box.
 #[wasm_bindgen(js_name = zoomFor)]
 pub fn zoom_for(west: f64, south: f64, east: f64, north: f64, width: u32, max_tiles: Option<u32>, max_zoom: Option<u8>) -> u8 {
@@ -170,10 +286,10 @@ pub fn tile_url(template: &str, z: u8, x: u32, y: u32) -> String {
 
 #[wasm_bindgen(js_name = defaultAreas)]
 pub fn default_areas() -> Vec<String> {
-    watermask::Filter::default().areas
+    watermask::Filter::DEFAULT_AREAS.iter().map(|s| s.to_string()).collect()
 }
 
 #[wasm_bindgen(js_name = defaultLines)]
 pub fn default_lines() -> Vec<String> {
-    watermask::Filter::default().lines
+    watermask::Filter::DEFAULT_LINES.iter().map(|s| s.to_string()).collect()
 }

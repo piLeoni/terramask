@@ -1,6 +1,6 @@
 [package]
 name = "watermask"
-description = "Water masks, shorelines and distance-to-shore grids for any area, from OpenStreetMap vector tiles fetched on demand"
+description = "Water, land, forest or park masks, outlines and distance grids for any area, from OpenStreetMap vector tiles fetched on demand; depth and height bands from terrain tiles"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,13 +10,16 @@ keywords = ["gis", "openstreetmap", "coastline", "vector-tiles", "raster"]
 categories = ["science::geo", "graphics"]
 
 [features]
-default = ["fetch"]
+default = ["fetch", "dem"]
 # Download and cache tiles over HTTP. Off for WebAssembly, where the page fetches.
 fetch = ["dep:ureq"]
+# Elevation from terrain tiles (Terrarium PNG), to cut areas into depth or height bands.
+dem = ["dep:png"]
 
 [dependencies]
 flate2 = "1"
 i_overlay = "9"
+png = { version = "0.17", optional = true }
 ureq = { version = "2", optional = true }
 
 [dev-dependencies]

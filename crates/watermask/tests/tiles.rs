@@ -78,7 +78,7 @@ fn filter_decides_what_is_water() {
     let g = grid_over(1244, 1244, 1529);
     let all = water(&[(1244, 1529, ISLAND)]).mask(&g, &MaskOptions::default()).water_fraction();
     let mut sea_only = Water::new();
-    let f = Filter { areas: vec!["ocean".into()], ..Filter::default() };
+    let f = Filter::water(&["ocean"], Filter::DEFAULT_LINES);
     sea_only.add_tile(TileId::new(12, 1244, 1529), ISLAND, &f).unwrap();
     let sea = sea_only.mask(&g, &MaskOptions::default()).water_fraction();
     assert!(sea < all, "lakes add water: {sea} vs {all}");
@@ -137,6 +137,119 @@ fn bounds_cut_areas_and_lines() {
         };
         assert!((cols(&a, 0..127) - cols(&b, 0..127)).abs() < 1.0);
         assert!(cols(&b, 129..256) < 1.0);
+    }
+}
+
+fn select(tiles: &[(u32, u32, &[u8])], items: &[&str]) -> Water {
+    let f = Filter::parse(items).unwrap();
+    let mut w = Water::new();
+    for &(x, y, b) in tiles {
+        w.add_tile(TileId::new(12, x, y), b, &f).unwrap();
+    }
+    w
+}
+
+#[test]
+fn other_layers_by_preset() {
+    let w = select(&[(1244, 1529, ISLAND)], &["forest", "parks", "lakes"]);
+    let layers: BTreeSet<(&str, &str)> = w.areas.iter().map(|a| (a.layer.as_str(), a.class.as_str())).collect();
+    assert!(layers.contains(&("landcover", "wood")), "{layers:?}");
+    assert!(layers.contains(&("water", "lake")), "{layers:?}");
+    assert!(layers.iter().all(|(l, c)| matches!((*l, *c), ("landcover", "wood") | ("park", _) | ("water", "lake"))), "{layers:?}");
+    assert!(w.lines.is_empty());
+    let woods = w.subset(&Filter::parse(&["forest"]).unwrap());
+    assert!(!woods.areas.is_empty() && woods.areas.iter().all(|a| a.layer == "landcover"));
+    let json = w.to_geojson(&GeoJsonOptions::default());
+    assert!(json.contains("\"properties\":{\"layer\":\"landcover\",\"class\":\"wood\"}"));
+}
+
+#[test]
+fn land_is_what_the_sea_leaves() {
+    let g = grid_over(1244, 1244, 1529);
+    let opts = MaskOptions::default();
+    let sea = select(&[(1244, 1529, ISLAND)], &["ocean"]).mask(&g, &opts);
+    let land = select(&[(1244, 1529, ISLAND)], &["land"]);
+    assert!(land.areas.iter().all(|a| a.layer == "land"));
+    let m = land.mask(&g, &opts);
+    let both: f32 = sea.coverage.iter().zip(&m.coverage).map(|(a, b)| a + b).sum::<f32>() / m.coverage.len() as f32;
+    assert!((both - 1.0).abs() < 1e-3, "sea + land = {both}");
+    assert!(m.water_fraction() > 0.5 && m.water_fraction() < 0.99, "{}", m.water_fraction());
+    // Open sea has no land; a tile with nothing in it is all land.
+    assert!(select(&[(1244, 1531, OPEN_SEA)], &["land"]).areas.is_empty());
+    let empty = select(&[(1244, 1530, &[])], &["land"]);
+    assert!(empty.mask(&grid_over(1244, 1244, 1530), &opts).water_fraction() > 0.999);
+}
+
+#[cfg(feature = "dem")]
+mod elevation {
+    use super::*;
+    use watermask::Elevation;
+
+    fn dem(tiles: &[(u32, u32)]) -> Elevation {
+        let mut e = Elevation::new();
+        for &(x, y) in tiles {
+            let png = std::fs::read(format!("{}/tests/fixtures/dem-12-{x}-{y}.png", env!("CARGO_MANIFEST_DIR"))).unwrap();
+            e.add_tile(TileId::new(12, x, y), &png).unwrap();
+        }
+        e
+    }
+
+    #[test]
+    fn terrarium_tiles_read_as_metres() {
+        let g = grid_over(1244, 1244, 1531);
+        let sea = dem(&[(1244, 1531)]).on(&g);
+        assert!(
+            sea.iter().all(|h| (-100.0..5.0).contains(h)),
+            "{:?}",
+            sea.iter().fold((f32::MAX, f32::MIN), |m, &h| (m.0.min(h), m.1.max(h)))
+        );
+        let island = dem(&[(1244, 1529)]).on(&grid_over(1244, 1244, 1529));
+        let top = island.iter().cloned().fold(f32::MIN, f32::max);
+        assert!(top > 30.0 && top < 120.0, "Martha's Vineyard tops out at {top} m");
+    }
+
+    #[test]
+    fn the_sea_cut_into_depth_bands() {
+        let tiles = [(1244, 1529, ISLAND), (1244, 1531, OPEN_SEA)];
+        let e = dem(&[(1244, 1529), (1244, 1531)]);
+        let sea = select(&tiles, &["ocean"]);
+        let bands = sea.split(&e, &[-20.0, -10.0, -5.0]).unwrap();
+        let ranges: BTreeSet<String> = bands.areas.iter().map(|a| format!("{:?}", a.elevation.unwrap())).collect();
+        assert!(ranges.len() >= 3, "{ranges:?}");
+        assert!(bands.areas.iter().all(|a| a.class == "ocean"));
+
+        // Together the bands are the sea; apart they do not overlap.
+        let g = grid_over(1244, 1244, 1529);
+        let opts = MaskOptions::default();
+        let whole = sea.mask(&g, &opts);
+        assert!(diff(&whole, &bands.mask(&g, &opts)) < 1e-3);
+        let parts: Vec<watermask::Mask> = [(f64::NEG_INFINITY, -20.0), (-20.0, -10.0), (-10.0, -5.0), (-5.0, f64::INFINITY)]
+            .iter()
+            .map(|&(lo, hi)| bands.within(lo, hi).mask(&g, &opts))
+            .collect();
+        let sum: Vec<f32> = (0..whole.coverage.len()).map(|i| parts.iter().map(|m| m.coverage[i]).sum()).collect();
+        let over = sum.iter().zip(&whole.coverage).map(|(s, w)| (s - w).abs()).sum::<f32>() / sum.len() as f32;
+        assert!(over < 1e-3, "bands overlap or leave gaps: {over}");
+
+        // Deep water is where the terrain says so.
+        let g = grid_over(1244, 1244, 1531);
+        let h = e.on(&g);
+        let deep = &bands.within(f64::NEG_INFINITY, -20.0).mask(&g, &opts).coverage;
+        let (n, agree) = deep.iter().zip(&h).filter(|(c, _)| **c > 0.99).fold((0, 0), |(n, a), (_, h)| (n + 1, a + (*h <= -19.0) as usize));
+        assert!(n > 100 && agree as f64 > 0.98 * n as f64, "{agree} of {n}");
+
+        let json = bands.to_geojson(&GeoJsonOptions::default());
+        assert!(json.contains("\"min\":null,\"max\":-20") && json.contains("\"min\":-5,\"max\":null"));
+    }
+
+    #[test]
+    fn the_land_cut_into_heights() {
+        let island = select(&[(1244, 1529, ISLAND)], &["land"]);
+        let hills = island.split(&dem(&[(1244, 1529)]), &[20.0]).unwrap().within(20.0, f64::INFINITY);
+        assert_eq!(hills.areas.len(), 1);
+        let f = hills.mask(&grid_over(1244, 1244, 1529), &MaskOptions::default()).water_fraction();
+        assert!(f > 0.05 && f < 0.6, "{f}");
+        assert!(island.split(&Elevation::new(), &[0.0]).is_err());
     }
 }
 

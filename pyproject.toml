@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "watermask"
 dynamic = ["version"]
-description = "Water masks, shorelines and distance-to-shore grids for any area, from OpenStreetMap vector tiles fetched on demand"
+description = "Water, land, forest or park masks, outlines and distance grids for any area, from OpenStreetMap vector tiles fetched on demand; depth and height bands from terrain tiles"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"

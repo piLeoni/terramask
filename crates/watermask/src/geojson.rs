@@ -4,7 +4,7 @@
 
 use std::fmt::Write;
 
-use crate::{merc_to_lonlat, Water};
+use crate::{merc_to_lonlat, Features};
 
 fn coords(out: &mut String, pts: &[[f64; 2]], close: bool) {
     out.push('[');
@@ -26,11 +26,37 @@ fn round7(v: f64) -> f64 {
     (v * 1e7).round() / 1e7
 }
 
-fn class(out: &mut String, c: &str) {
-    let _ = write!(out, "\"properties\":{{\"class\":\"{}\"}}", c.replace('\\', "\\\\").replace('"', "\\\""));
+fn quoted(s: &str) -> String {
+    let mut q = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => q.push_str("\\\""),
+            '\\' => q.push_str("\\\\"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(q, "\\u{:04x}", c as u32);
+            }
+            c => q.push(c),
+        }
+    }
+    q.push('"');
+    q
 }
 
-pub fn write(w: &Water) -> String {
+fn properties(out: &mut String, layer: &str, class: &str, elevation: Option<[f64; 2]>) {
+    let _ = write!(out, "\"properties\":{{\"layer\":{},\"class\":{}", quoted(layer), quoted(class));
+    if let Some(band) = elevation {
+        for (k, v) in [("min", band[0]), ("max", band[1])] {
+            if v.is_finite() {
+                let _ = write!(out, ",\"{k}\":{v}");
+            } else {
+                let _ = write!(out, ",\"{k}\":null");
+            }
+        }
+    }
+    out.push('}');
+}
+
+pub fn write(w: &Features) -> String {
     let mut out = String::from("{\"type\":\"FeatureCollection\",\"features\":[");
     let mut first = true;
     let mut sep = |out: &mut String| {
@@ -51,7 +77,7 @@ pub fn write(w: &Water) -> String {
         }
         sep(&mut out);
         out.push_str("{\"type\":\"Feature\",");
-        class(&mut out, &a.class);
+        properties(&mut out, &a.layer, &a.class, a.elevation);
         out.push_str(",\"geometry\":{\"type\":\"MultiPolygon\",\"coordinates\":[");
         for (i, p) in polys.iter().enumerate() {
             if i > 0 {
@@ -71,7 +97,7 @@ pub fn write(w: &Water) -> String {
     for l in &w.lines {
         sep(&mut out);
         out.push_str("{\"type\":\"Feature\",");
-        class(&mut out, &l.class);
+        properties(&mut out, &l.layer, &l.class, None);
         out.push_str(",\"geometry\":{\"type\":\"LineString\",\"coordinates\":");
         coords(&mut out, &l.points, false);
         out.push_str("}}");

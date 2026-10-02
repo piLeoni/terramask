@@ -29,9 +29,16 @@ pub fn outlines(v: &[f32], w: usize, h: usize, level: f32) -> Vec<Vec<[f32; 2]>>
             let s = c.map(|(cx, cy)| wet(cx, cy));
             let edge = [2 * (y * w + x), 2 * (y * w + x + 1) + 1, 2 * ((y + 1) * w + x), 2 * (y * w + x) + 1];
             let crossed: Vec<usize> = (0..4).filter(|&k| s[k] != s[(k + 1) % 4]).collect();
+            // Edge k joins corners k and k+1.
+            let mid = |k: usize| {
+                let (a, b) = (c[k], c[(k + 1) % 4]);
+                [(a.0 + b.0) as f32 / 2.0, (a.1 + b.1) as f32 / 2.0]
+            };
             let mut add = |ka: usize, kb: usize, corner: usize| {
                 // Orient so the corner's side (wet or dry) is where it belongs.
-                let (pa, pb, pc) = (point(edge[ka]), point(edge[kb]), [c[corner].0 as f32 + 0.5, c[corner].1 as f32 + 0.5]);
+                // Edge midpoints, not the crossings: a crossing can sit on the
+                // corner itself, and the side would be a coin toss.
+                let (pa, pb, pc) = (mid(ka), mid(kb), [c[corner].0 as f32, c[corner].1 as f32]);
                 let cross = (pb[0] - pa[0]) * (pc[1] - pa[1]) - (pb[1] - pa[1]) * (pc[0] - pa[0]);
                 let corner_left = cross < 0.0;
                 let (a, b) = if corner_left == s[corner] { (edge[ka], edge[kb]) } else { (edge[kb], edge[ka]) };
@@ -127,6 +134,20 @@ mod tests {
         let o = outlines(&v, 40, 40, 0.5);
         assert_eq!(o.len(), 1);
         assert!(signed_area(&o[0]) > 0.0);
+    }
+
+    #[test]
+    fn crossings_on_the_samples_still_close() {
+        // A frame far below the level puts every crossing next to it on a
+        // sample, right on the corner the side is judged from.
+        let (w, h) = (12, 9);
+        let v: Vec<f32> = (0..w * h)
+            .map(|i| if i % w == 0 || i / w == 0 || i % w == w - 1 || i / w == h - 1 { -1e7 } else { (i % 3) as f32 * 0.1 })
+            .collect();
+        let o = outlines(&v, w, h, 0.0);
+        assert_eq!(o.len(), 1);
+        assert_eq!(o[0].first(), o[0].last());
+        assert!(signed_area(&o[0]) < 0.0);
     }
 
     #[test]
