@@ -1,9 +1,9 @@
 # terramask
 
-Masks of the world for any area on Earth: the sea, lakes and rivers, the land,
+Geographic masks for any area on Earth: the sea, lakes and rivers, the land,
 forests, glaciers, parks, or any layer of OpenStreetMap, as a coverage grid,
-outline polylines, a signed distance field or GeoJSON polygons. Areas can be
-cut into depth or height bands from terrain tiles.
+outline polylines, a signed distance field or GeoJSON polygons. Areas can also
+be cut into depth or height bands from terrain tiles.
 
 Everything comes from tiles fetched on demand, so there is nothing to download
 in advance: only the tiles covering the area, at the zoom that matches the
@@ -28,7 +28,7 @@ vineyard = (-70.85, 41.3, -70.45, 41.55)          # west, south, east, north
 water = terramask.fetch(vineyard, width=1200)     # tiles are cached after the first run
 mask = water.mask(vineyard, 1200)
 
-mask.coverage      # (1000, 1200) float32, fraction of each pixel covered
+mask.coverage      # (1000, 1200) float32, fraction of each pixel that is water
 mask.outlines()    # shoreline: [(n, 2) float32] in pixels, water on the left
 mask.distance()    # pixels to the shore, positive in water, negative on land
 water.geojson()    # the water as GeoJSON in lon/lat, one MultiPolygon per class
@@ -366,14 +366,16 @@ terramask is watermask 0.2 plus other layers, land and elevation bands, under
 a new name. With the default selection it returns the same water. To move
 over, change the package name, then:
 
-| watermask                         | terramask                          |
-|-----------------------------------|------------------------------------|
-| `Water` (Rust, Python, Node, wasm) | `Features`                        |
-| `Fetcher::water_for` (Rust)        | `Fetcher::features_for`           |
-| `Mask::water_fraction` (Rust, Python) | `Mask::fraction`               |
+| watermask                                   | terramask                          |
+|---------------------------------------------|------------------------------------|
+| `Water` (Rust, Python, Node, wasm)          | `Features`                         |
+| `Fetcher::water_for` (Rust)                 | `Fetcher::features_for`            |
+| `water_fraction` on masks (Rust, Python)    | `fraction`                         |
+| `Filter { areas, lines, .. }` (Rust)        | `Filter::water(&areas, &lines)`, or `Filter::parse` |
 | `$WATERMASK_CACHE`, `…/watermask` cache folder | `$TERRAMASK_CACHE`, `…/terramask` |
 
-The cache starts empty: tiles are now stored one file per layer.
+The `areas` and `lines` options of the other languages are unchanged. The
+cache is a new folder, so the first run downloads the tiles again.
 
 ## License
 
