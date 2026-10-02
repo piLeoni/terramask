@@ -108,7 +108,8 @@ terramask.fetch(vineyard, width=1200, select=["landuse:cemetery", "park:*"])   #
 Any layer and class of the [OpenMapTiles schema](https://openmaptiles.org/schema/)
 can be named as `layer:class,class`, or `layer:*` for all of it. A name picks
 a class or a subclass: city parks are `landcover:park` (subclass `park` of
-class `grass`), footways `transportation:footway`. Only the layers asked for
+class `grass`), footways `transportation:footway`; `landcover:grass/grass` is
+the lawns alone, not the rest of class `grass`. Only the layers asked for
 are downloaded and cached, each on its own, so asking for forests after water
 fetches the tiles once more, and only their `landcover`. GeoJSON features
 carry `layer`, `class`, `subclass` and the other attributes of the tile

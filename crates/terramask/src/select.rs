@@ -8,7 +8,8 @@ pub const LAND: &str = "land";
 
 /// Named selections, as rules: `layer:class,class` or `layer:*`. A name in a
 /// rule picks a class or a subclass: `landcover:park` is the parks among
-/// landcover `grass`.
+/// landcover `grass`; `landcover:grass/grass` is that subclass of that class
+/// only.
 pub const PRESETS: &[(&str, &str)] = &[
     ("water", "water:ocean,lake,river,dock waterway:river,canal,stream"),
     ("ocean", "water:ocean"),
@@ -47,10 +48,14 @@ impl Rule {
         self.keeps(layer, class, "")
     }
 
-    /// Whether a feature of `layer` with this class and subclass passes.
+    /// Whether a feature of `layer` with this class and subclass passes. A
+    /// name is a class or a subclass; `class/subclass` is that pair only.
     pub fn keeps(&self, layer: &str, class: &str, subclass: &str) -> bool {
-        self.layer == layer
-            && (self.classes.is_empty() || self.classes.iter().any(|c| c == class || (!subclass.is_empty() && c == subclass)))
+        let named = |c: &String| match c.split_once('/') {
+            Some((a, b)) => a == class && b == subclass,
+            None => c == class || (!subclass.is_empty() && c == subclass),
+        };
+        self.layer == layer && (self.classes.is_empty() || self.classes.iter().any(named))
     }
 
     fn parse(s: &str) -> Result<Rule, Error> {
@@ -189,6 +194,8 @@ mod tests {
         assert!(f.keeps("building", "", "") && f.keeps("transportation", "minor", "residential"));
         assert!(!f.keeps("transportation", "path", "footway"));
         assert_eq!(f.layers(), ["landcover", "building", "transportation"]);
+        let lawns = Filter::parse(&["landcover:grass/grass"]).unwrap();
+        assert!(lawns.keeps("landcover", "grass", "grass") && !lawns.keeps("landcover", "grass", "scrub"));
     }
 
     #[test]
