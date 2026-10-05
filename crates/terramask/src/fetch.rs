@@ -172,6 +172,13 @@ impl Fetcher {
         self.features_from(&source, &tiles_for(&bounds, z.min(source.max_zoom)), filter, progress)
     }
 
+    /// The features that pass `filter` in exactly these tiles: say from
+    /// [`crate::tiles_touching`], for an area that is not its box.
+    pub fn features_of(&self, ids: &[TileId], filter: &Filter, progress: impl Fn(usize, usize) + Sync) -> Result<Features, Error> {
+        let source = self.resolve()?;
+        self.features_from(&source, ids, filter, progress)
+    }
+
     /// The features for a grid, at the zoom that matches its resolution (see
     /// [`crate::zoom_for`]; the source's deepest zoom caps `limits`).
     pub fn features_for(

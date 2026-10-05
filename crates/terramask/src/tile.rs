@@ -96,6 +96,76 @@ pub fn tiles_for(b: &Bounds, z: u8) -> Vec<TileId> {
     (y0..=y1).flat_map(|y| (x0..=x1).map(move |x| TileId { z, x, y })).collect()
 }
 
+/// Tiles at zoom `z` that touch the polygon `ring` (lon/lat, closed or not),
+/// row by row from the north-west: for a turned or thin area, far fewer than
+/// [`tiles_for`] its bounding box. A ring spanning more than 180° of
+/// longitude falls back to the box.
+pub fn tiles_touching(ring: &[[f64; 2]], z: u8) -> Vec<TileId> {
+    if ring.len() < 3 {
+        return Vec::new();
+    }
+    let (w, e) = ring.iter().fold((f64::MAX, f64::MIN), |(w, e), p| (w.min(p[0]), e.max(p[0])));
+    let (s, n) = ring.iter().fold((f64::MAX, f64::MIN), |(s, n), p| (s.min(p[1]), n.max(p[1])));
+    let bounds = [w, s, e, n];
+    if e - w > 180.0 {
+        return tiles_for(&bounds, z);
+    }
+    let poly: Vec<[f64; 2]> = ring.iter().map(|p| lonlat_to_merc(p[0], p[1])).collect();
+    tiles_for(&bounds, z).into_iter().filter(|t| touches(&poly, t.merc_bounds())).collect()
+}
+
+/// Whether the polygon `poly` (Mercator) and the rectangle `r` share any
+/// point: an edge crossing it, a corner of `r` inside `poly`, or `poly`
+/// inside `r`.
+fn touches(poly: &[[f64; 2]], r: [f64; 4]) -> bool {
+    let inside_r = |p: &[f64; 2]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
+    if poly.iter().any(inside_r) {
+        return true;
+    }
+    let n = poly.len();
+    if (0..n).any(|i| segment_hits_rect(poly[i], poly[(i + 1) % n], r)) {
+        return true;
+    }
+    contains(poly, [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0])
+}
+
+/// Liang–Barsky: whether the segment `a → b` meets the rectangle.
+fn segment_hits_rect(a: [f64; 2], b: [f64; 2], r: [f64; 4]) -> bool {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    for (p, q) in [(-dx, a[0] - r[0]), (dx, r[2] - a[0]), (-dy, a[1] - r[1]), (dy, r[3] - a[1])] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return false;
+            }
+        } else {
+            let t = q / p;
+            if p < 0.0 {
+                t0 = t0.max(t);
+            } else {
+                t1 = t1.min(t);
+            }
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Even–odd point in polygon.
+fn contains(poly: &[[f64; 2]], p: [f64; 2]) -> bool {
+    let mut inside = false;
+    let n = poly.len();
+    for i in 0..n {
+        let (a, b) = (poly[i], poly[(i + n - 1) % n]);
+        if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
 /// The shallowest zoom whose tiles hold at least the detail of `width`
 /// pixels across the box, capped at `limits.max_zoom`, then lowered until the
 /// box needs at most `limits.max_tiles` tiles.
@@ -133,6 +203,43 @@ mod tests {
         let b = t[0].merc_bounds();
         let [x, y] = lonlat_to_merc(4.9, 52.37);
         assert!(b[0] <= x && x <= b[2] && b[1] <= y && y <= b[3]);
+    }
+
+    /// A long thin strip turned 34°: its box is near square, the strip is not.
+    fn turned_strip() -> Vec<[f64; 2]> {
+        let (cx, cy, half_len, half_w, a) = (9.17, 45.47, 0.32, 0.0065, (-34.0_f64).to_radians());
+        [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+            .iter()
+            .map(|(u, v)| {
+                let (x, y) = (u * half_len, v * half_w);
+                [cx + x * a.cos() - y * a.sin(), cy + (x * a.sin() + y * a.cos()) * 0.7]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_turned_strip_needs_only_the_tiles_it_crosses() {
+        let ring = turned_strip();
+        let all = {
+            let (w, e) = ring.iter().fold((f64::MAX, f64::MIN), |(w, e), p| (w.min(p[0]), e.max(p[0])));
+            let (s, n) = ring.iter().fold((f64::MAX, f64::MIN), |(s, n), p| (s.min(p[1]), n.max(p[1])));
+            tiles_for(&[w, s, e, n], 14)
+        };
+        let touched = tiles_touching(&ring, 14);
+        assert!(touched.len() * 4 < all.len(), "{} of {}", touched.len(), all.len());
+        // Every tile under a point of the strip is kept.
+        for k in 0..=100 {
+            let t = k as f64 / 100.0;
+            let p = [ring[0][0] + (ring[2][0] - ring[0][0]) * t, ring[0][1] + (ring[2][1] - ring[0][1]) * t];
+            let under = tiles_for(&[p[0], p[1], p[0], p[1]], 14)[0];
+            assert!(touched.contains(&under), "{under} at {p:?}");
+        }
+    }
+
+    #[test]
+    fn a_small_area_inside_one_tile_keeps_it() {
+        let ring = [[4.9, 52.37], [4.9001, 52.37], [4.9001, 52.3701], [4.9, 52.3701]];
+        assert_eq!(tiles_touching(&ring, 12), vec![TileId::new(12, 2103, 1346)]);
     }
 
     #[test]

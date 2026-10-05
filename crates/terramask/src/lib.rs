@@ -51,7 +51,7 @@ pub use dem::{Elevation, TERRARIUM, TERRARIUM_MAX_ZOOM, TERRARIUM_ZOOM};
 #[cfg(feature = "fetch")]
 pub use fetch::{default_cache, Fetcher, Source, MAX_AGE, OPENFREEMAP};
 pub use select::{Filter, Rule, LAND, PRESETS};
-pub use tile::{lonlat_to_merc, merc_to_lonlat, tiles_for, zoom_for, Bounds, TileId, MAX_ZOOM};
+pub use tile::{lonlat_to_merc, merc_to_lonlat, tiles_for, tiles_touching, zoom_for, Bounds, TileId, MAX_ZOOM};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
