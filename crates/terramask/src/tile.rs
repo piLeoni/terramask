@@ -12,8 +12,8 @@ pub type Bounds = [f64; 4];
 /// Deepest zoom of OpenMapTiles-schema tiles.
 pub const MAX_ZOOM: u8 = 14;
 
-const R: f64 = 6378137.0;
-const WORLD: f64 = 2.0 * PI * R;
+pub(crate) const R: f64 = 6378137.0;
+pub(crate) const WORLD: f64 = 2.0 * PI * R;
 const MAX_LAT: f64 = 85.051_128_779_806_59;
 /// Tiles are drawn 256 px wide; sources simplify for that size.
 const TILE_PX: f64 = 256.0;
@@ -184,9 +184,28 @@ pub fn zoom_for(b: &Bounds, width: usize, limits: &ZoomLimits) -> u8 {
     z
 }
 
+/// Ground metres across this many MVT extent units at zoom `z` (a tile is 4096 units wide).
+pub fn mvt_units_to_m(z: u8, units: f64) -> f64 {
+    let tile_w = WORLD / (1u64 << z) as f64;
+    tile_w / 4096.0 * units
+}
+
+/// Approximate degrees at latitude `lat` for `units` MVT extent units at zoom `z`.
+pub fn mvt_units_to_deg(lat: f64, z: u8, units: f64) -> f64 {
+    let m = mvt_units_to_m(z, units);
+    m / (111_320.0 * lat.to_radians().cos().max(1e-6))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mvt_margin_scales_with_zoom() {
+        let z12 = mvt_units_to_m(12, 64.0);
+        let z14 = mvt_units_to_m(14, 64.0);
+        assert!(z14 < z12 && z12 > 0.0);
+    }
 
     #[test]
     fn mercator_round_trip() {
