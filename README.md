@@ -103,6 +103,7 @@ terramask.fetch(vineyard, width=1200, select=["landuse:cemetery", "park:*"])   #
 | `buildings`| `building:*`                                              |
 | `roads`    | `transportation:motorway,trunk,primary,secondary,tertiary,minor,service,busway,raceway` |
 | `paths`    | `transportation:path,track`                               |
+| `road_names` | `transportation_name:*` (centrelines with `name`, `ref`, for labels) |
 | `rail`     | `transportation:rail,transit`                             |
 
 Any layer and class of the [OpenMapTiles schema](https://openmaptiles.org/schema/)

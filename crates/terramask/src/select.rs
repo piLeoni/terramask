@@ -28,6 +28,7 @@ pub const PRESETS: &[(&str, &str)] = &[
     ("buildings", "building:*"),
     ("roads", "transportation:motorway,trunk,primary,secondary,tertiary,minor,service,busway,raceway"),
     ("paths", "transportation:path,track"),
+    ("road_names", "transportation_name:*"),
     ("rail", "transportation:rail,transit"),
 ];
 
