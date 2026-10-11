@@ -177,6 +177,23 @@ fn tag<'a>(tags: &'a [(String, String)], key: &str) -> Option<&'a str> {
     tags.binary_search_by(|(k, _)| k.as_str().cmp(key)).ok().map(|i| tags[i].1.as_str())
 }
 
+/// A point feature (`place`, `poi`…), in Web Mercator metres.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pin {
+    pub layer: String,
+    pub class: String,
+    pub subclass: String,
+    pub tags: Vec<(String, String)>,
+    pub position: [f64; 2],
+    pub tile: Option<TileId>,
+}
+
+impl Pin {
+    pub fn tag(&self, key: &str) -> Option<&str> {
+        tag(&self.tags, key)
+    }
+}
+
 /// Areas and lines collected from tiles. Each tile's features are cut to the
 /// tile, so neighbouring tiles meet edge to edge without overlapping; an area
 /// spanning several tiles is several pieces.
@@ -184,6 +201,7 @@ fn tag<'a>(tags: &'a [(String, String)], key: &str) -> Option<&'a str> {
 pub struct Features {
     pub areas: Vec<Area>,
     pub lines: Vec<Line>,
+    pub pins: Vec<Pin>,
 }
 
 impl Features {
@@ -207,6 +225,11 @@ impl Features {
         for l in t.lines {
             self.lines.push(Line { points: to_merc(l.points), tile: Some(id), ..l });
         }
+        for p in t.pins {
+            let [x, y] = p.position;
+            let [mx, my] = [x0 + x * size, y1 - y * size];
+            self.pins.push(Pin { position: [mx, my], tile: Some(id), ..p });
+        }
         if filter.land() {
             let sea: Vec<Ring> = t.sea.into_iter().map(ring).collect();
             let rings = merge::overlay(&merge::rect(id.merc_bounds()), &merge::paths(&sea), OverlayRule::Difference);
@@ -223,6 +246,7 @@ impl Features {
         Features {
             areas: self.areas.iter().filter(|a| filter.keeps(&a.layer, &a.class, &a.subclass)).cloned().collect(),
             lines: self.lines.iter().filter(|l| filter.keeps(&l.layer, &l.class, &l.subclass)).cloned().collect(),
+            pins: self.pins.iter().filter(|p| filter.keeps(&p.layer, &p.class, &p.subclass)).cloned().collect(),
         }
     }
 
@@ -230,7 +254,7 @@ impl Features {
     /// [`Features::split`]); lines are kept.
     pub fn within(&self, low: f64, high: f64) -> Features {
         let inside = |a: &&Area| a.elevation.is_some_and(|[lo, hi]| lo >= low && hi <= high);
-        Features { areas: self.areas.iter().filter(inside).cloned().collect(), lines: self.lines.clone() }
+        Features { areas: self.areas.iter().filter(inside).cloned().collect(), lines: self.lines.clone(), pins: self.pins.clone() }
     }
 
     /// Coverage on a north-up Web Mercator grid.
@@ -288,7 +312,11 @@ impl Features {
     /// line. With `bounds`, everything is cut to that box.
     pub fn joined(&self, bounds: Option<Bounds>) -> Features {
         let clip = bounds.map(|b| tile::merc_extent(&b));
-        Features { areas: merge::join_areas(&self.areas, clip), lines: merge::join_lines(&self.lines, clip) }
+        Features {
+            areas: merge::join_areas(&self.areas, clip),
+            lines: merge::join_lines(&self.lines, clip),
+            pins: merge::clip_pins(&self.pins, clip),
+        }
     }
 
     /// Areas and lines cut to `bounds`, the tile pieces kept apart.
@@ -298,7 +326,11 @@ impl Features {
 
     fn reshaped(&self, merge: bool, bounds: Option<Bounds>) -> Features {
         let clip = bounds.map(|b| tile::merc_extent(&b));
-        Features { areas: merge::areas(&self.areas, merge, clip), lines: merge::lines(&self.lines, clip) }
+        Features {
+            areas: merge::areas(&self.areas, merge, clip),
+            lines: merge::lines(&self.lines, clip),
+            pins: merge::clip_pins(&self.pins, clip),
+        }
     }
 
     /// Everything as a GeoJSON FeatureCollection in lon/lat, with `layer`

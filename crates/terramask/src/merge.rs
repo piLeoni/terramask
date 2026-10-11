@@ -13,7 +13,7 @@ use i_overlay::float::overlay::{FloatOverlay, OverlayOptions};
 use std::collections::HashMap;
 
 use crate::mvt::clip_line;
-use crate::{Area, Line, Ring, TileId};
+use crate::{Area, Line, Pin, Ring, TileId};
 
 pub(crate) type Path = Vec<[f64; 2]>;
 
@@ -276,6 +276,20 @@ pub fn lines(lines: &[Line], clip: Option<[f64; 4]>) -> Vec<Line> {
             })
             .collect(),
     }
+}
+
+/// Points inside the clip rectangle (inclusive), Mercator metres.
+pub(crate) fn clip_pins(pins: &[Pin], clip: Option<[f64; 4]>) -> Vec<Pin> {
+    let Some([x0, y0, x1, y1]) = clip else {
+        return pins.to_vec();
+    };
+    pins.iter()
+        .filter(|p| {
+            let [x, y] = p.position;
+            x >= x0 && x <= x1 && y >= y0 && y <= y1
+        })
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]

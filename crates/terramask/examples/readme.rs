@@ -106,7 +106,7 @@ fn waterlines(path: &std::path::Path, bounds: [f64; 4], width: usize) -> Result<
     const K: f32 = 2.0;
     let grid = Grid::with_width(bounds, width * K as usize);
     let water = fetch(&grid)?;
-    let sea = Features { areas: water.areas.iter().filter(|a| a.class == "ocean").cloned().collect(), lines: Vec::new() };
+    let sea = Features { areas: water.areas.iter().filter(|a| a.class == "ocean").cloned().collect(), lines: Vec::new(), pins: Vec::new() };
     let opts = MaskOptions::default();
     let dist = sea.mask(&grid, &opts).distance();
 
@@ -125,7 +125,7 @@ fn waterlines(path: &std::path::Path, bounds: [f64; 4], width: usize) -> Result<
         let grey = ((d / FAR).powf(0.7) * 200.0) as u8;
         stroke(&mut pm, &scale(band.outlines(), 1.0 / K), 0.55, grey);
     }
-    let inland = Features { areas: water.areas.iter().filter(|a| a.class != "ocean").cloned().collect(), lines: Vec::new() };
+    let inland = Features { areas: water.areas.iter().filter(|a| a.class != "ocean").cloned().collect(), lines: Vec::new(), pins: Vec::new() };
     stroke(&mut pm, &scale(inland.mask(&grid, &opts).outlines(), 1.0 / K), 0.6, 90);
     stroke(&mut pm, &scale(sea.mask(&grid, &opts).outlines(), 1.0 / K), 1.3, 0);
     frame(&mut pm);

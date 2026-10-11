@@ -380,7 +380,7 @@ impl Features {
                 }
             }
         }
-        Ok(Features { areas, lines: self.lines.clone() })
+        Ok(Features { areas, lines: self.lines.clone(), pins: self.pins.clone() })
     }
 }
 
@@ -409,6 +409,7 @@ mod tests {
         let all = Features {
             areas: vec![crate::Area::new("land", "land", vec![crate::Ring { exterior: true, points: rect(b).remove(0) }])],
             lines: vec![],
+            pins: vec![],
         };
         let bands = all.split(&e, &[50.0, 25.0, 75.0]).unwrap();
         let got: Vec<[f64; 2]> = bands.areas.iter().map(|a| a.elevation.unwrap()).collect();

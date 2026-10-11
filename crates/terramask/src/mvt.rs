@@ -11,6 +11,7 @@ use crate::{Area, Filter, Line, Ring};
 pub struct TileFeatures {
     pub areas: Vec<Area>,
     pub lines: Vec<Line>,
+    pub pins: Vec<crate::Pin>,
     /// The sea (`water`, class `ocean`), whatever the filter, when it asks for land.
     pub sea: Vec<Ring>,
 }
@@ -69,7 +70,7 @@ fn layer_name(buf: &[u8]) -> Result<String, String> {
 
 pub fn read(bytes: &[u8], filter: &Filter) -> Result<TileFeatures, String> {
     let bytes = gunzip(bytes)?;
-    let mut out = TileFeatures { areas: Vec::new(), lines: Vec::new(), sea: Vec::new() };
+    let mut out = TileFeatures { areas: Vec::new(), lines: Vec::new(), pins: Vec::new(), sea: Vec::new() };
     let mut r = Pbf::new(&bytes);
     while let Some((field, wire)) = r.key()? {
         if field == 3 && wire == 2 {
@@ -168,6 +169,22 @@ fn read_layer(buf: &[u8], filter: &Filter, out: &mut TileFeatures) -> Result<(),
             attrs.sort();
         }
         match kind {
+            1 if keep => {
+                for part in decode(&geom)? {
+                    for p in part {
+                        if p[0] >= 0.0 && p[0] <= extent && p[1] >= 0.0 && p[1] <= extent {
+                            out.pins.push(crate::Pin {
+                                layer: name.clone(),
+                                class: class.clone(),
+                                subclass: subclass.clone(),
+                                tags: attrs.clone(),
+                                position: [p[0] / extent, p[1] / extent],
+                                tile: None,
+                            });
+                        }
+                    }
+                }
+            }
             2 if keep => {
                 for part in decode(&geom)? {
                     for piece in clip_line(&part, [0.0, 0.0, extent, extent]) {
