@@ -52,8 +52,7 @@ pub use dem::{Elevation, TERRARIUM, TERRARIUM_MAX_ZOOM, TERRARIUM_ZOOM};
 pub use fetch::{default_cache, Fetcher, Source, MAX_AGE, OPENFREEMAP};
 pub use select::{Filter, Rule, LAND, PRESETS};
 pub use tile::{
-    lonlat_to_merc, merc_to_lonlat, mvt_units_to_deg, mvt_units_to_m, tiles_for, tiles_touching, zoom_for, Bounds, TileId,
-    MAX_ZOOM,
+    lonlat_to_merc, merc_to_lonlat, mvt_units_to_deg, mvt_units_to_m, tiles_for, tiles_touching, zoom_for, Bounds, TileId, MAX_ZOOM,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -107,15 +106,7 @@ pub struct Area {
 
 impl Area {
     pub fn new(layer: &str, class: &str, rings: Vec<Ring>) -> Area {
-        Area {
-            layer: layer.into(),
-            class: class.into(),
-            subclass: String::new(),
-            tags: Vec::new(),
-            rings,
-            elevation: None,
-            tile: None,
-        }
+        Area { layer: layer.into(), class: class.into(), subclass: String::new(), tags: Vec::new(), rings, elevation: None, tile: None }
     }
 
     /// The value of attribute `key`.

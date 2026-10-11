@@ -144,7 +144,8 @@ pub fn join_areas(areas: &[Area], clip: Option<[f64; 4]>) -> Vec<Area> {
     let mut order = Vec::new();
     for a in areas {
         if a.rings.iter().flat_map(|r| &r.points).any(|&p| on_tile_edge(a.tile, p)) {
-            let key = ((a.layer.as_str(), a.class.as_str(), a.subclass.as_str(), a.tags.as_slice()), a.elevation.map(|e| e.map(f64::to_bits)));
+            let key =
+                ((a.layer.as_str(), a.class.as_str(), a.subclass.as_str(), a.tags.as_slice()), a.elevation.map(|e| e.map(f64::to_bits)));
             let list = cut.entry(key).or_default();
             if list.is_empty() {
                 order.push(key);
@@ -193,7 +194,7 @@ pub fn join_lines(lines: &[Line], clip: Option<[f64; 4]>) -> Vec<Line> {
 fn chain(pieces: &[&Line]) -> Vec<Vec<[f64; 2]>> {
     let end = |k: usize| {
         let p = &pieces[k / 2].points;
-        if k % 2 == 0 {
+        if k.is_multiple_of(2) {
             p[0]
         } else {
             p[p.len() - 1]
@@ -246,7 +247,7 @@ fn chain(pieces: &[&Line]) -> Vec<Vec<[f64; 2]>> {
             seen[k / 2] = true;
             let p = &pieces[k / 2].points;
             let skip = usize::from(!pts.is_empty());
-            if k % 2 == 0 {
+            if k.is_multiple_of(2) {
                 pts.extend(p.iter().skip(skip));
             } else {
                 pts.extend(p.iter().rev().skip(skip));
@@ -335,9 +336,17 @@ mod tests {
         let (t0, t1) = (TileId::new(16, 100, 200), TileId::new(16, 101, 200));
         let x = t0.merc_bounds()[2];
         let y = t0.merc_bounds()[1] + 10.0;
-        let road = |t: TileId, pts: Vec<[f64; 2]>| Line { tile: Some(t), subclass: "residential".into(), ..Line::new("transportation", "minor", pts) };
+        let road = |t: TileId, pts: Vec<[f64; 2]>| Line {
+            tile: Some(t),
+            subclass: "residential".into(),
+            ..Line::new("transportation", "minor", pts)
+        };
         // The right piece runs backwards, and its cut end is rounded a bit off.
-        let pieces = [road(t0, vec![[x - 50.0, y], [x, y]]), road(t1, vec![[x + 50.0, y + 5.0], [x, y + 0.01]]), road(t1, vec![[x, y + 30.0], [x + 9.0, y + 30.0]])];
+        let pieces = [
+            road(t0, vec![[x - 50.0, y], [x, y]]),
+            road(t1, vec![[x + 50.0, y + 5.0], [x, y + 0.01]]),
+            road(t1, vec![[x, y + 30.0], [x + 9.0, y + 30.0]]),
+        ];
         let out = join_lines(&pieces, None);
         assert_eq!(out.len(), 2, "two roads: one mended, one alone (its cut end has no partner)");
         let long = out.iter().find(|l| l.points.len() == 3).expect("mended road");

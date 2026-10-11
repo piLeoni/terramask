@@ -37,17 +37,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (k, v) in &before {
         println!("{:<16} {:<14} {:<18} {:<5} {:>7} {:>7}", k.0, k.1, k.2, k.3, v, after.get(k).copied().unwrap_or(0));
     }
-    let tags: BTreeMap<&str, usize> = pieces.areas.iter().flat_map(|a| &a.tags).chain(pieces.lines.iter().flat_map(|l| &l.tags)).fold(BTreeMap::new(), |mut m, (k, _)| {
-        *m.entry(k.as_str()).or_default() += 1;
-        m
-    });
+    let tags: BTreeMap<&str, usize> = pieces.areas.iter().flat_map(|a| &a.tags).chain(pieces.lines.iter().flat_map(|l| &l.tags)).fold(
+        BTreeMap::new(),
+        |mut m, (k, _)| {
+            *m.entry(k.as_str()).or_default() += 1;
+            m
+        },
+    );
     println!("\nattributes: {tags:?}");
 
     // Line ends left on a seam inside the fetched tiles: joins that failed.
     let ids = terramask::tiles_for(&bounds, zoom);
     let size = ids[0].merc_size();
-    let (x0, y1) = (ids.iter().map(|t| t.merc_bounds()[0]).fold(f64::MAX, f64::min), ids.iter().map(|t| t.merc_bounds()[3]).fold(f64::MIN, f64::max));
-    let (x1, y0) = (ids.iter().map(|t| t.merc_bounds()[2]).fold(f64::MIN, f64::max), ids.iter().map(|t| t.merc_bounds()[1]).fold(f64::MAX, f64::min));
+    let (x0, y1) =
+        (ids.iter().map(|t| t.merc_bounds()[0]).fold(f64::MAX, f64::min), ids.iter().map(|t| t.merc_bounds()[3]).fold(f64::MIN, f64::max));
+    let (x1, y0) =
+        (ids.iter().map(|t| t.merc_bounds()[2]).fold(f64::MIN, f64::max), ids.iter().map(|t| t.merc_bounds()[1]).fold(f64::MAX, f64::min));
     let seam = |v: f64, lo: f64, hi: f64| v > lo + 1.0 && v < hi - 1.0 && (((v - lo) / size).round() * size + lo - v).abs() < size * 1e-6;
     let open = |f: &Features| {
         f.lines
@@ -72,7 +77,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|(m, q)| ((q[0] - p[0]).hypot(q[1] - p[1]), m))
                 .min_by(|a, b| a.0.total_cmp(&b.0));
             match near {
-                Some((d, m)) => println!("  {}/{}/{} {:?} — nearest {d:.2} m {}/{}/{} {:?}", l.layer, l.class, l.subclass, l.tags, m.class, m.subclass, m.layer, m.tags),
+                Some((d, m)) => println!(
+                    "  {}/{}/{} {:?} — nearest {d:.2} m {}/{}/{} {:?}",
+                    l.layer, l.class, l.subclass, l.tags, m.class, m.subclass, m.layer, m.tags
+                ),
                 None => println!("  {}/{}/{} alone", l.layer, l.class, l.subclass),
             }
         }

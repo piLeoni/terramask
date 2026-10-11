@@ -125,7 +125,8 @@ fn waterlines(path: &std::path::Path, bounds: [f64; 4], width: usize) -> Result<
         let grey = ((d / FAR).powf(0.7) * 200.0) as u8;
         stroke(&mut pm, &scale(band.outlines(), 1.0 / K), 0.55, grey);
     }
-    let inland = Features { areas: water.areas.iter().filter(|a| a.class != "ocean").cloned().collect(), lines: Vec::new(), pins: Vec::new() };
+    let inland =
+        Features { areas: water.areas.iter().filter(|a| a.class != "ocean").cloned().collect(), lines: Vec::new(), pins: Vec::new() };
     stroke(&mut pm, &scale(inland.mask(&grid, &opts).outlines(), 1.0 / K), 0.6, 90);
     stroke(&mut pm, &scale(sea.mask(&grid, &opts).outlines(), 1.0 / K), 1.3, 0);
     frame(&mut pm);
