@@ -424,6 +424,18 @@ pub struct Mask {
 }
 
 impl Mask {
+    /// Coverage of rings already in pixels (x right, y down), filled as
+    /// [`Features::mask`] fills areas: exteriors union, holes cut, edge
+    /// pixels partly covered; `supersample` sub-rows per pixel row. For
+    /// polygons from anywhere, not only tiles.
+    pub fn from_rings(width: usize, height: usize, rings: &[Ring], supersample: u32) -> Mask {
+        let mut r = raster::Raster::new(width, height);
+        for ring in rings {
+            r.add_ring(ring.points.clone(), ring.exterior);
+        }
+        Mask { width, height, coverage: r.fill(supersample.max(1)) }
+    }
+
     /// The shoreline: where coverage crosses one half, as polylines in pixels
     /// with water on the left. Rings are closed (last point = first); lines
     /// that leave the grid are open.

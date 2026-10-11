@@ -240,6 +240,10 @@ let dist = mask.distance();
 // Any projection: lon, lat → pixel.
 let tm = water.mask_with(800, 600, &MaskOptions::default(), |lon, lat| my_projection(lon, lat));
 
+// Polygons from anywhere, already in pixels: the same fill, outlines and distance.
+let park = terramask::Mask::from_rings(800, 600, &[terramask::Ring { exterior: true, points: park_px }], 4);
+let to_edge = park.distance();
+
 // Polygons: joined per class and cut to the box (Features::merged gives the same as structs).
 let json = water.to_geojson(&GeoJsonOptions { bounds: Some(bounds), ..Default::default() });
 
