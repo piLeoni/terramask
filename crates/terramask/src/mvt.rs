@@ -108,10 +108,12 @@ impl Value {
     }
 }
 
-/// Names in other languages (`name:de`, `name_en`, `name_int`…): dozens per
-/// feature in some layers, and no use for drawing.
+/// Names in other languages (`name:de`, `name:zh`…): dozens per feature in
+/// some layers, and no use for drawing. `name:latin`, `name:en`, `name_en` and
+/// `name_int` stay so non-Latin places can be labelled in Latin script.
 fn translated_name(key: &str) -> bool {
-    key.starts_with("name:") || key.starts_with("name_")
+    !matches!(key, "name:latin" | "name:en" | "name_en" | "name_int")
+        && (key.starts_with("name:") || key.starts_with("name_"))
 }
 
 fn read_layer(buf: &[u8], filter: &Filter, out: &mut TileFeatures) -> Result<(), String> {

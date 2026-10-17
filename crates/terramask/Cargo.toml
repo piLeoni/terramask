@@ -26,9 +26,9 @@ required-features = ["fetch"]
 
 [dependencies]
 flate2 = "1"
-i_overlay = "9"
+i_overlay = "4.5"
 png = { version = "0.17", optional = true }
-ureq = { version = "2", optional = true }
+ureq = { version = "3", optional = true }
 
 [dev-dependencies]
 png = "0.17"

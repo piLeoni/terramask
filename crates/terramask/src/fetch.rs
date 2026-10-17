@@ -77,12 +77,13 @@ impl Fetcher {
 
     fn agent(&self) -> &ureq::Agent {
         self.agent.get_or_init(|| {
-            ureq::AgentBuilder::new()
+            ureq::Agent::config_builder()
                 .user_agent(AGENT)
                 .max_idle_connections_per_host(self.threads.max(1))
-                .timeout_connect(Duration::from_secs(15))
-                .timeout_read(Duration::from_secs(60))
+                .timeout_connect(Some(Duration::from_secs(15)))
+                .timeout_recv_body(Some(Duration::from_secs(60)))
                 .build()
+                .into()
         })
     }
 
@@ -349,12 +350,12 @@ fn prune_dir(dir: &Path, max_age: Duration) {
 fn get(agent: &ureq::Agent, url: &str) -> Result<Option<Vec<u8>>, Error> {
     match agent.get(url).call() {
         Ok(r) if r.status() == 204 => Ok(None),
-        Ok(r) => {
+        Ok(mut r) => {
             let mut body = Vec::new();
-            r.into_reader().read_to_end(&mut body).map_err(|e| Error::Net(format!("{url}: {e}")))?;
+            r.body_mut().as_reader().read_to_end(&mut body).map_err(|e| Error::Net(format!("{url}: {e}")))?;
             Ok(Some(body))
         }
-        Err(ureq::Error::Status(404, _)) => Ok(None),
+        Err(ureq::Error::StatusCode(404)) => Ok(None),
         Err(e) => Err(Error::Net(format!("{url}: {e}"))),
     }
 }
