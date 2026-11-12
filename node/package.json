@@ -48,5 +48,13 @@
   "license": "MIT",
   "devDependencies": {
     "@napi-rs/cli": "^3.10.5"
+  },
+  "optionalDependencies": {
+    "@pileoni/terramask-darwin-arm64": "0.2.0",
+    "@pileoni/terramask-darwin-x64": "0.2.0",
+    "@pileoni/terramask-linux-x64-gnu": "0.2.0",
+    "@pileoni/terramask-linux-arm64-gnu": "0.2.0",
+    "@pileoni/terramask-win32-x64-msvc": "0.2.0",
+    "@pileoni/terramask-win32-arm64-msvc": "0.2.0"
   }
 }
